@@ -1,0 +1,163 @@
+{
+  "id": "attentiond-1",
+  "result": {
+    "type": "session_snapshot",
+    "snapshot": {
+      "version": "0.9.0",
+      "protocol": 22,
+      "focused_workspace_id": "w1",
+      "focused_tab_id": "w1:t1",
+      "focused_pane_id": "w1:p1",
+      "workspaces": [
+        {
+          "workspace_id": "w1",
+          "number": 1,
+          "label": "attentiond",
+          "focused": true,
+          "pane_count": 2,
+          "tab_count": 2,
+          "active_tab_id": "w1:t1",
+          "agent_status": "working"
+        },
+        {
+          "workspace_id": "w2",
+          "number": 2,
+          "label": "tofu",
+          "focused": false,
+          "pane_count": 2,
+          "tab_count": 1,
+          "active_tab_id": "w2:t1",
+          "agent_status": "blocked"
+        }
+      ],
+      "tabs": [
+        {
+          "tab_id": "w1:t1",
+          "workspace_id": "w1",
+          "number": 1,
+          "label": "agents",
+          "focused": true,
+          "pane_count": 1,
+          "agent_status": "working"
+        },
+        {
+          "tab_id": "w1:t2",
+          "workspace_id": "w1",
+          "number": 2,
+          "label": "tests",
+          "focused": false,
+          "pane_count": 1,
+          "agent_status": "done"
+        },
+        {
+          "tab_id": "w2:t1",
+          "workspace_id": "w2",
+          "number": 1,
+          "label": "plan",
+          "focused": false,
+          "pane_count": 2,
+          "agent_status": "blocked"
+        }
+      ],
+      "panes": [
+        {
+          "pane_id": "w1:p1",
+          "terminal_id": "term_a1",
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "focused": true,
+          "agent": "claude",
+          "agent_status": "working",
+          "cwd": "/Users/me/projects/attentiond",
+          "revision": 812
+        },
+        {
+          "pane_id": "w1:p2",
+          "terminal_id": "term_a2",
+          "workspace_id": "w1",
+          "tab_id": "w1:t2",
+          "focused": false,
+          "agent": "codex",
+          "agent_status": "done",
+          "cwd": "/Users/me/projects/attentiond",
+          "revision": 640
+        },
+        {
+          "pane_id": "w2:p1",
+          "terminal_id": "term_b1",
+          "workspace_id": "w2",
+          "tab_id": "w2:t1",
+          "focused": false,
+          "agent": "codex",
+          "agent_status": "blocked",
+          "cwd": "/Users/me/projects/tofu",
+          "revision": 94
+        },
+        {
+          "pane_id": "w2:p2",
+          "terminal_id": "term_b2",
+          "workspace_id": "w2",
+          "tab_id": "w2:t1",
+          "focused": false,
+          "agent_status": "unknown",
+          "label": "shell",
+          "cwd": "/Users/me/projects/tofu",
+          "revision": 12
+        }
+      ],
+      "layouts": [],
+      "agents": [
+        {
+          "pane_id": "w1:p1",
+          "terminal_id": "term_a1",
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "focused": true,
+          "agent": "claude",
+          "name": "reviewer",
+          "agent_status": "working",
+          "terminal_title_stripped": "claude: reviewing store.go",
+          "cwd": "/Users/me/projects/attentiond",
+          "foreground_cwd": "/Users/me/projects/attentiond/internal",
+          "interactive_ready": true,
+          "launch_pending": false,
+          "screen_detection_skipped": false,
+          "state_change_seq": 41,
+          "revision": 812
+        },
+        {
+          "pane_id": "w1:p2",
+          "terminal_id": "term_a2",
+          "workspace_id": "w1",
+          "tab_id": "w1:t2",
+          "focused": false,
+          "agent": "codex",
+          "agent_status": "done",
+          "title": "Port the snapshot decoder",
+          "cwd": "/Users/me/projects/attentiond",
+          "interactive_ready": true,
+          "launch_pending": false,
+          "screen_detection_skipped": false,
+          "state_change_seq": 37,
+          "revision": 640
+        },
+        {
+          "pane_id": "w2:p1",
+          "terminal_id": "term_b1",
+          "workspace_id": "w2",
+          "tab_id": "w2:t1",
+          "focused": false,
+          "agent": "codex",
+          "display_agent": "Codex: plan",
+          "agent_status": "blocked",
+          "cwd": "/Users/me/projects/tofu",
+          "interactive_ready": true,
+          "launch_pending": false,
+          "screen_detection_skipped": false,
+          "state_change_seq": 18,
+          "revision": 94
+        }
+      ]
+    }
+  }
+}

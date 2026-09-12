@@ -1,0 +1,14 @@
+[tools]
+go = "1.23"
+
+[tasks.dev]
+run = "go run ./cmd/attentiond"
+
+[tasks.fixture]
+run = "go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json"
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks.build]
+run = "go build -o bin/attentiond ./cmd/attentiond"
