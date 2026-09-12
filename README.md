@@ -30,7 +30,9 @@ Flags, all with environment equivalents where it helps:
 | `--github` | `true` | poll GitHub; skipped anyway when no credential resolves |
 | `--github-poll` | `1m` | GitHub poll interval |
 | `--github-stale-draft` | `336h` | how long a draft may sit before it is called stale |
-| `--github-limit` | `30` | maximum pull requests per search |
+| `--github-repos` | none | only watch these `owner/name` repositories, comma separated |
+| `--github-orgs` | none | also watch every repository in these accounts |
+| `--github-limit` | `100` | pull requests per search before the result is reported incomplete |
 | `--github-api` | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise |
 | `--event-ttl` | `1h` | how long finished event items stay visible |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
@@ -206,6 +208,30 @@ Unlike the Herdr adapter, a failed poll keeps the last good result. Herdr being
 unreachable means those panes are gone; GitHub being unreachable says nothing
 about whether the pull requests still want you. `/health` turns unhealthy and
 carries the error either way.
+
+### Watching fewer repositories
+
+Every repository your token can see is a lot of repositories. Narrow it:
+
+```bash
+attentiond --github-orgs didx-xyz,mach4-braai --github-repos mcgeerdev/portfolio
+```
+
+`ATTENTIOND_GITHUB_REPOS` and `ATTENTIOND_GITHUB_ORGS` do the same. Repeating a
+qualifier is how GitHub search spells OR, so repositories and accounts union
+rather than intersect, and the scope applies to both searches.
+
+A malformed entry fails startup rather than being ignored. GitHub answers an
+unmatched qualifier with an empty result, and an empty attention queue is
+indistinguishable from having nothing to do.
+
+### Nothing is silently dropped
+
+Both searches page through cursors until they run out or `--github-limit` is
+reached. Hitting the limit sets a warning that travels with the data: `/health`
+carries it on the source, and `/api/work` and `/api/attention` carry it in
+`warnings`, so a consumer showing a capped list can say so. `healthy` stays
+true, because the adapter works; the answer is just not the whole answer.
 
 ## Glance
 

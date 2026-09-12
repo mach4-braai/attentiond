@@ -34,6 +34,8 @@ type options struct {
 	githubPoll    time.Duration
 	githubStale   time.Duration
 	githubLimit   int
+	githubRepos   string
+	githubOrgs    string
 	eventTTL      time.Duration
 	logLevel      string
 	logFormat     string
@@ -78,7 +80,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	githubPoller := newGitHubPoller(ctx, opts, store, logger)
+	githubPoller, err := newGitHubPoller(ctx, opts, store, logger)
+	if err != nil {
+		return err
+	}
 	if githubPoller != nil {
 		sources[github.SourceName] = githubPoller.SourceStatus
 	}
@@ -145,9 +150,17 @@ func run() error {
 // available. A missing token is not an error: the daemon is useful without it,
 // and a hard failure here would make `attentiond` unstartable on a machine that
 // never logged into gh.
-func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, log *slog.Logger) *github.Poller {
+func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, log *slog.Logger) (*github.Poller, error) {
 	if !opts.githubEnabled {
-		return nil
+		return nil, nil
+	}
+
+	// A mistyped repository is fatal on purpose. GitHub answers an unmatched
+	// qualifier with an empty result, and an empty attention queue is
+	// indistinguishable from having nothing to do.
+	scope, err := github.ParseScope(opts.githubRepos, opts.githubOrgs)
+	if err != nil {
+		return nil, err
 	}
 
 	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -155,20 +168,21 @@ func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, 
 	token, origin, err := github.ResolveToken(lookup)
 	if err != nil {
 		log.Warn("github adapter disabled, no credential", "error", err)
-		return nil
+		return nil, nil
 	}
-	log.Info("github adapter enabled", "credential", origin, "poll", opts.githubPoll.String())
+	log.Info("github adapter enabled",
+		"credential", origin, "poll", opts.githubPoll.String(), "scope", scope.String())
 
 	return github.NewPoller(
 		github.NewClient(opts.githubAPI, token, 15*time.Second),
 		store,
 		github.PollerConfig{
 			Interval: opts.githubPoll,
-			Limit:    opts.githubLimit,
+			Search:   github.Search{Scope: scope, Limit: opts.githubLimit},
 			Normal:   github.Config{StaleDraftAfter: opts.githubStale},
 		},
 		log,
-	)
+	), nil
 }
 
 func parseFlags() options {
@@ -191,8 +205,12 @@ func parseFlags() options {
 		"how often to poll GitHub")
 	flag.DurationVar(&opts.githubStale, "github-stale-draft", 14*24*time.Hour,
 		"how long a draft may sit untouched before it is reported as stale")
-	flag.IntVar(&opts.githubLimit, "github-limit", 30,
-		"maximum pull requests per search")
+	flag.IntVar(&opts.githubLimit, "github-limit", 100,
+		"maximum pull requests per search before the result is reported as incomplete")
+	flag.StringVar(&opts.githubRepos, "github-repos", os.Getenv("ATTENTIOND_GITHUB_REPOS"),
+		"only watch these repositories, comma separated `owner/name` (default: every repository the token can see)")
+	flag.StringVar(&opts.githubOrgs, "github-orgs", os.Getenv("ATTENTIOND_GITHUB_ORGS"),
+		"also watch every repository in these accounts, comma separated logins")
 	flag.DurationVar(&opts.eventTTL, "event-ttl", time.Hour,
 		"how long finished or failed items from /api/events stay visible")
 	flag.StringVar(&opts.logLevel, "log-level", envOr("ATTENTIOND_LOG_LEVEL", "info"),

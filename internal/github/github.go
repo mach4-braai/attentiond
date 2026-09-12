@@ -130,17 +130,100 @@ func (pr PullRequest) Checks() string {
 	return ""
 }
 
+// Scope narrows which repositories are watched. An empty scope watches every
+// repository the token can see.
+type Scope struct {
+	// Repos are owner/name pairs, turned into repo: qualifiers.
+	Repos []string
+	// Orgs are account logins, turned into org: qualifiers.
+	Orgs []string
+}
+
+// ParseScope reads comma or space separated lists and rejects anything that
+// would silently change what is searched. A typo has to fail loudly: a
+// qualifier GitHub does not understand narrows the queue to nothing, and an
+// empty attention queue looks exactly like having nothing to do.
+func ParseScope(repos, orgs string) (Scope, error) {
+	var scope Scope
+	for _, repo := range splitList(repos) {
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return Scope{}, fmt.Errorf("github repo %q is not owner/name", repo)
+		}
+		scope.Repos = append(scope.Repos, repo)
+	}
+	for _, org := range splitList(orgs) {
+		if strings.ContainsAny(org, "/ ") {
+			return Scope{}, fmt.Errorf("github org %q is not an account login", org)
+		}
+		scope.Orgs = append(scope.Orgs, org)
+	}
+	return scope, nil
+}
+
+// Empty reports whether the scope watches everything.
+func (s Scope) Empty() bool {
+	return len(s.Repos) == 0 && len(s.Orgs) == 0
+}
+
+// String renders the scope for logs and /health.
+func (s Scope) String() string {
+	if s.Empty() {
+		return "everything"
+	}
+	return strings.TrimSpace(s.qualifiers())
+}
+
+// qualifiers builds the search suffix. Repeating a qualifier is how GitHub
+// search spells OR, so repos and orgs union rather than intersect.
+func (s Scope) qualifiers() string {
+	var b strings.Builder
+	for _, repo := range s.Repos {
+		b.WriteString(" repo:" + repo)
+	}
+	for _, org := range s.Orgs {
+		b.WriteString(" org:" + org)
+	}
+	return b.String()
+}
+
+func splitList(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	for i, field := range fields {
+		fields[i] = strings.TrimSpace(field)
+	}
+	return fields
+}
+
+// Search is one poll's worth of parameters.
+type Search struct {
+	Scope Scope
+	// Limit caps how many pull requests each of the two searches returns.
+	Limit int
+}
+
+// pageSize is GitHub's maximum for a search connection.
+const pageSize = 50
+
 // Inbox is everything one poll learned.
 type Inbox struct {
 	Login           string
 	Authored        []PullRequest
 	ReviewRequested []PullRequest
+	// Truncated is set when GitHub had more results than Limit allowed. The
+	// caller must surface it: a silently capped attention queue is worse than
+	// no attention queue, because it looks complete.
+	Truncated bool
 }
 
-const inboxQuery = `query($mine:String!,$review:String!,$limit:Int!){
+const searchQuery = `query($q:String!,$first:Int!,$after:String){
   viewer{login}
-  mine:search(query:$mine,type:ISSUE,first:$limit){nodes{...pr}}
-  review:search(query:$review,type:ISSUE,first:$limit){nodes{...pr}}
+  search(query:$q,type:ISSUE,first:$first,after:$after){
+    pageInfo{hasNextPage endCursor}
+    nodes{...pr}
+  }
 }
 fragment pr on PullRequest{
   number title url isDraft updatedAt
@@ -160,12 +243,13 @@ type graphQLResponse struct {
 		Viewer struct {
 			Login string `json:"login"`
 		} `json:"viewer"`
-		Mine struct {
+		Search struct {
+			PageInfo struct {
+				HasNextPage bool   `json:"hasNextPage"`
+				EndCursor   string `json:"endCursor"`
+			} `json:"pageInfo"`
 			Nodes []PullRequest `json:"nodes"`
-		} `json:"mine"`
-		Review struct {
-			Nodes []PullRequest `json:"nodes"`
-		} `json:"review"`
+		} `json:"search"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -174,22 +258,67 @@ type graphQLResponse struct {
 
 // Inbox fetches the open pull requests you authored and the ones waiting on
 // your review. Archived repositories are excluded: nothing there is actionable.
-func (c *Client) Inbox(ctx context.Context, limit int) (Inbox, error) {
-	body, err := json.Marshal(graphQLRequest{
-		Query: inboxQuery,
-		Variables: map[string]any{
-			"mine":   "is:open is:pr author:@me archived:false",
-			"review": "is:open is:pr review-requested:@me archived:false",
-			"limit":  limit,
-		},
-	})
+func (c *Client) Inbox(ctx context.Context, search Search) (Inbox, error) {
+	suffix := search.Scope.qualifiers()
+
+	authored, login, moreAuthored, err := c.searchAll(ctx,
+		"is:open is:pr author:@me archived:false"+suffix, search.Limit)
 	if err != nil {
 		return Inbox{}, err
+	}
+	review, reviewLogin, moreReview, err := c.searchAll(ctx,
+		"is:open is:pr review-requested:@me archived:false"+suffix, search.Limit)
+	if err != nil {
+		return Inbox{}, err
+	}
+	if login == "" {
+		login = reviewLogin
+	}
+
+	return Inbox{
+		Login:           login,
+		Authored:        authored,
+		ReviewRequested: review,
+		Truncated:       moreAuthored || moreReview,
+	}, nil
+}
+
+// searchAll pages until the results run out or limit is reached, and reports
+// whether GitHub still had more.
+func (c *Client) searchAll(ctx context.Context, query string, limit int) (pulls []PullRequest, login string, more bool, err error) {
+	if limit <= 0 {
+		limit = pageSize
+	}
+	cursor := ""
+	for len(pulls) < limit {
+		want := min(limit-len(pulls), pageSize)
+		page, err := c.searchPage(ctx, query, want, cursor)
+		if err != nil {
+			return nil, "", false, err
+		}
+		login = page.Data.Viewer.Login
+		pulls = append(pulls, page.Data.Search.Nodes...)
+		if !page.Data.Search.PageInfo.HasNextPage {
+			return pulls, login, false, nil
+		}
+		cursor = page.Data.Search.PageInfo.EndCursor
+	}
+	return pulls, login, true, nil
+}
+
+func (c *Client) searchPage(ctx context.Context, query string, first int, after string) (graphQLResponse, error) {
+	variables := map[string]any{"q": query, "first": first}
+	if after != "" {
+		variables["after"] = after
+	}
+	body, err := json.Marshal(graphQLRequest{Query: searchQuery, Variables: variables})
+	if err != nil {
+		return graphQLResponse{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Inbox{}, err
+		return graphQLResponse{}, err
 	}
 	req.Header.Set("Authorization", "bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
@@ -199,32 +328,27 @@ func (c *Client) Inbox(ctx context.Context, limit int) (Inbox, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return Inbox{}, err
+		return graphQLResponse{}, err
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return Inbox{}, err
+		return graphQLResponse{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Inbox{}, fmt.Errorf("github graphql: %s: %s", resp.Status, firstLine(raw))
+		return graphQLResponse{}, fmt.Errorf("github graphql: %s: %s", resp.Status, firstLine(raw))
 	}
 
 	var decoded graphQLResponse
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return Inbox{}, fmt.Errorf("decode github response: %w", err)
+		return graphQLResponse{}, fmt.Errorf("decode github response: %w", err)
 	}
 	// GraphQL reports failures in a 200 body, so this is the real error path.
 	if len(decoded.Errors) > 0 {
-		return Inbox{}, fmt.Errorf("github graphql: %s", decoded.Errors[0].Message)
+		return graphQLResponse{}, fmt.Errorf("github graphql: %s", decoded.Errors[0].Message)
 	}
-
-	return Inbox{
-		Login:           decoded.Data.Viewer.Login,
-		Authored:        decoded.Data.Mine.Nodes,
-		ReviewRequested: decoded.Data.Review.Nodes,
-	}, nil
+	return decoded, nil
 }
 
 func firstLine(raw []byte) string {
