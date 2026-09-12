@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
 )
@@ -23,14 +24,19 @@ import (
 var version = "dev"
 
 type options struct {
-	addr         string
-	publicURL    string
-	herdrSocket  string
-	herdrFixture string
-	herdrPoll    time.Duration
-	eventTTL     time.Duration
-	logLevel     string
-	logFormat    string
+	addr          string
+	publicURL     string
+	herdrSocket   string
+	herdrFixture  string
+	herdrPoll     time.Duration
+	githubEnabled bool
+	githubAPI     string
+	githubPoll    time.Duration
+	githubStale   time.Duration
+	githubLimit   int
+	eventTTL      time.Duration
+	logLevel      string
+	logFormat     string
 }
 
 func main() {
@@ -65,11 +71,21 @@ func run() error {
 		Interval: opts.herdrPoll,
 	}, logger)
 
+	sources := map[string]func() attention.SourceStatus{
+		herdr.SourceName: poller.SourceStatus,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	githubPoller := newGitHubPoller(ctx, opts, store, logger)
+	if githubPoller != nil {
+		sources[github.SourceName] = githubPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
-		Store: store,
-		Sources: map[string]func() attention.SourceStatus{
-			herdr.SourceName: poller.SourceStatus,
-		},
+		Store:   store,
+		Sources: sources,
 		Actions: map[string]httpapi.Executor{
 			herdr.SourceName: herdr.NewActions(client, opts.herdrFixture != ""),
 		},
@@ -78,10 +94,10 @@ func run() error {
 		Log:     logger,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	go poller.Run(ctx)
+	if githubPoller != nil {
+		go githubPoller.Run(ctx)
+	}
 
 	server := &http.Server{
 		Addr:              opts.addr,
@@ -125,6 +141,36 @@ func run() error {
 	return nil
 }
 
+// newGitHubPoller returns nil when GitHub polling is off or no credential is
+// available. A missing token is not an error: the daemon is useful without it,
+// and a hard failure here would make `attentiond` unstartable on a machine that
+// never logged into gh.
+func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, log *slog.Logger) *github.Poller {
+	if !opts.githubEnabled {
+		return nil
+	}
+
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	token, origin, err := github.ResolveToken(lookup)
+	if err != nil {
+		log.Warn("github adapter disabled, no credential", "error", err)
+		return nil
+	}
+	log.Info("github adapter enabled", "credential", origin, "poll", opts.githubPoll.String())
+
+	return github.NewPoller(
+		github.NewClient(opts.githubAPI, token, 15*time.Second),
+		store,
+		github.PollerConfig{
+			Interval: opts.githubPoll,
+			Limit:    opts.githubLimit,
+			Normal:   github.Config{StaleDraftAfter: opts.githubStale},
+		},
+		log,
+	)
+}
+
 func parseFlags() options {
 	var opts options
 	flag.StringVar(&opts.addr, "addr", envOr("ATTENTIOND_ADDR", "127.0.0.1:7717"),
@@ -137,6 +183,16 @@ func parseFlags() options {
 		"read a recorded `herdr api snapshot` from this file instead of a live Herdr server")
 	flag.DurationVar(&opts.herdrPoll, "herdr-poll", 2*time.Second,
 		"how often to poll Herdr for a session snapshot")
+	flag.BoolVar(&opts.githubEnabled, "github", true,
+		"poll GitHub for pull requests you authored or were asked to review")
+	flag.StringVar(&opts.githubAPI, "github-api", envOr("ATTENTIOND_GITHUB_API", github.DefaultEndpoint),
+		"GraphQL endpoint, for GitHub Enterprise")
+	flag.DurationVar(&opts.githubPoll, "github-poll", time.Minute,
+		"how often to poll GitHub")
+	flag.DurationVar(&opts.githubStale, "github-stale-draft", 14*24*time.Hour,
+		"how long a draft may sit untouched before it is reported as stale")
+	flag.IntVar(&opts.githubLimit, "github-limit", 30,
+		"maximum pull requests per search")
 	flag.DurationVar(&opts.eventTTL, "event-ttl", time.Hour,
 		"how long finished or failed items from /api/events stay visible")
 	flag.StringVar(&opts.logLevel, "log-level", envOr("ATTENTIOND_LOG_LEVEL", "info"),
