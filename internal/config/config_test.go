@@ -17,6 +17,30 @@ func write(t *testing.T, body string) string {
 	return path
 }
 
+// The example is documentation that can go stale silently, except that Load
+// rejects unknown keys, so loading it here turns a renamed or deleted setting
+// into a failing test instead of a file that lies.
+func TestExampleConfigStaysValid(t *testing.T) {
+	cfg, found, err := Load("../../config.example.toml", true)
+	if err != nil {
+		t.Fatalf("config.example.toml: %v", err)
+	}
+	if !found {
+		t.Fatal("config.example.toml is missing")
+	}
+
+	// It shows every key, so every table has to survive the round trip.
+	if cfg.Daemon.Addr == "" || cfg.Events.TTL == 0 || cfg.Herdr.Poll == 0 {
+		t.Errorf("example decoded to %+v", cfg)
+	}
+	if cfg.GitHub.Limit == 0 || cfg.GitHub.StaleDraftAfter == 0 {
+		t.Errorf("example github decoded to %+v", cfg.GitHub)
+	}
+	if len(cfg.GitHub.Repos) == 0 || len(cfg.GitHub.Orgs) == 0 {
+		t.Error("the example stopped showing how to scope repositories")
+	}
+}
+
 func TestLoadOnlyChangesWhatTheFileSays(t *testing.T) {
 	path := write(t, `
 [daemon]
