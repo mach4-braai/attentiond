@@ -101,8 +101,10 @@ its own source name and gets the same route for free.
 ## Package structure
 
 ```
-cmd/attentiond        flags, logger, wiring, graceful shutdown
+cmd/attentiond        flags, config resolution, logger, wiring, graceful shutdown
 internal/attention    Item, State, Severity, Action, in-memory Store
+internal/config       the TOML file: defaults, loading, validation
+internal/github       GraphQL client, pull request classification, poller
 internal/herdr        socket client, snapshot normalization, poller, focus executor
 internal/httpapi      routes, event ingestion, action dispatch
 ```
@@ -111,9 +113,15 @@ internal/httpapi      routes, event ingestion, action dispatch
 `attention` and not on each other; `httpapi` declares the `Executor` interface it
 consumes, and `herdr` satisfies it without importing the HTTP package.
 
-Dependencies: the standard library only. Go 1.22 `net/http` routing patterns
-cover the routes, `log/slog` covers structured logging, and `encoding/json`
-covers both wire formats.
+Dependencies: `github.com/BurntSushi/toml` and otherwise the standard library.
+Go 1.22 `net/http` routing patterns cover the routes, `log/slog` covers
+structured logging, and `encoding/json` covers both wire formats.
+
+The TOML dependency arrived with the config file and is the only one. A config
+language is not worth hand-rolling, and the alternative, configuring a daemon
+with a growing wall of flags, is what the file replaced. JSON would have kept
+the dependency count at zero and cost comments, which a file a human edits
+needs more than the project needs a clean go.sum.
 
 ## Persistence decision
 

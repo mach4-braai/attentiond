@@ -11,10 +11,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/config"
 	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
@@ -22,24 +25,6 @@ import (
 
 // version is overridden at build time with -ldflags "-X main.version=...".
 var version = "dev"
-
-type options struct {
-	addr          string
-	publicURL     string
-	herdrSocket   string
-	herdrFixture  string
-	herdrPoll     time.Duration
-	githubEnabled bool
-	githubAPI     string
-	githubPoll    time.Duration
-	githubStale   time.Duration
-	githubLimit   int
-	githubRepos   string
-	githubOrgs    string
-	eventTTL      time.Duration
-	logLevel      string
-	logFormat     string
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -49,38 +34,50 @@ func main() {
 }
 
 func run() error {
-	opts := parseFlags()
-
-	logger, err := newLogger(opts)
+	cfg, configPath, err := resolveConfig()
 	if err != nil {
 		return err
 	}
 
-	if err := requireLoopback(opts.addr); err != nil {
+	logger, err := newLogger(cfg.Daemon)
+	if err != nil {
 		return err
 	}
-	if opts.publicURL == "" {
-		opts.publicURL = "http://" + opts.addr
+	if configPath != "" {
+		logger.Info("configuration loaded", "path", configPath)
+	} else {
+		logger.Info("no configuration file, running on defaults", "looked_at", config.DefaultPath())
+	}
+
+	if err := requireLoopback(cfg.Daemon.Addr); err != nil {
+		return err
+	}
+	if cfg.Daemon.PublicURL == "" {
+		cfg.Daemon.PublicURL = "http://" + cfg.Daemon.Addr
 	}
 
 	started := time.Now()
-	store := attention.NewStore(logger, opts.eventTTL)
+	store := attention.NewStore(logger, cfg.Events.TTL.Std())
 
-	client := herdr.NewClient(opts.herdrSocket, 5*time.Second)
-	poller := herdr.NewPoller(client, store, herdr.PollerConfig{
-		Fixture:  opts.herdrFixture,
-		BaseURL:  opts.publicURL,
-		Interval: opts.herdrPoll,
-	}, logger)
-
-	sources := map[string]func() attention.SourceStatus{
-		herdr.SourceName: poller.SourceStatus,
-	}
+	sources := map[string]func() attention.SourceStatus{}
+	actions := map[string]httpapi.Executor{}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	githubPoller, err := newGitHubPoller(ctx, opts, store, logger)
+	var herdrPoller *herdr.Poller
+	if cfg.Herdr.Enabled {
+		client := herdr.NewClient(cfg.Herdr.Socket, 5*time.Second)
+		herdrPoller = herdr.NewPoller(client, store, herdr.PollerConfig{
+			Fixture:  cfg.Herdr.Fixture,
+			BaseURL:  cfg.Daemon.PublicURL,
+			Interval: cfg.Herdr.Poll.Std(),
+		}, logger)
+		sources[herdr.SourceName] = herdrPoller.SourceStatus
+		actions[herdr.SourceName] = herdr.NewActions(client, cfg.Herdr.Fixture != "")
+	}
+
+	githubPoller, err := newGitHubPoller(ctx, cfg.GitHub, store, logger)
 	if err != nil {
 		return err
 	}
@@ -91,26 +88,26 @@ func run() error {
 	handler := httpapi.New(httpapi.Config{
 		Store:   store,
 		Sources: sources,
-		Actions: map[string]httpapi.Executor{
-			herdr.SourceName: herdr.NewActions(client, opts.herdrFixture != ""),
-		},
+		Actions: actions,
 		Version: version,
 		Started: started,
 		Log:     logger,
 	})
 
-	go poller.Run(ctx)
+	if herdrPoller != nil {
+		go herdrPoller.Run(ctx)
+	}
 	if githubPoller != nil {
 		go githubPoller.Run(ctx)
 	}
 
 	server := &http.Server{
-		Addr:              opts.addr,
+		Addr:              cfg.Daemon.Addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	listener, err := net.Listen("tcp", opts.addr)
+	listener, err := net.Listen("tcp", cfg.Daemon.Addr)
 	if err != nil {
 		return err
 	}
@@ -118,10 +115,9 @@ func run() error {
 	logger.Info("attentiond started",
 		"version", version,
 		"addr", listener.Addr().String(),
-		"public_url", opts.publicURL,
-		"herdr_mode", poller.SourceStatus().Mode,
-		"herdr_poll", opts.herdrPoll.String(),
-		"event_ttl", opts.eventTTL.String())
+		"public_url", cfg.Daemon.PublicURL,
+		"sources", strings.Join(sourceNames(sources), ","),
+		"event_ttl", cfg.Events.TTL.String())
 
 	errs := make(chan error, 1)
 	go func() {
@@ -150,15 +146,12 @@ func run() error {
 // available. A missing token is not an error: the daemon is useful without it,
 // and a hard failure here would make `attentiond` unstartable on a machine that
 // never logged into gh.
-func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, log *slog.Logger) (*github.Poller, error) {
-	if !opts.githubEnabled {
+func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.Store, log *slog.Logger) (*github.Poller, error) {
+	if !cfg.Enabled {
 		return nil, nil
 	}
 
-	// A mistyped repository is fatal on purpose. GitHub answers an unmatched
-	// qualifier with an empty result, and an empty attention queue is
-	// indistinguishable from having nothing to do.
-	scope, err := github.ParseScope(opts.githubRepos, opts.githubOrgs)
+	scope, err := github.NewScope(cfg.Repos, cfg.Orgs)
 	if err != nil {
 		return nil, err
 	}
@@ -171,70 +164,126 @@ func newGitHubPoller(ctx context.Context, opts options, store *attention.Store, 
 		return nil, nil
 	}
 	log.Info("github adapter enabled",
-		"credential", origin, "poll", opts.githubPoll.String(), "scope", scope.String())
+		"credential", origin, "poll", cfg.Poll.String(), "scope", scope.String())
 
 	return github.NewPoller(
-		github.NewClient(opts.githubAPI, token, 15*time.Second),
+		github.NewClient(cfg.API, token, 15*time.Second),
 		store,
 		github.PollerConfig{
-			Interval: opts.githubPoll,
-			Search:   github.Search{Scope: scope, Limit: opts.githubLimit},
-			Normal:   github.Config{StaleDraftAfter: opts.githubStale},
+			Interval: cfg.Poll.Std(),
+			Search:   github.Search{Scope: scope, Limit: cfg.Limit},
+			Normal:   github.Config{StaleDraftAfter: cfg.StaleDraftAfter.Std()},
 		},
 		log,
 	), nil
 }
 
-func parseFlags() options {
-	var opts options
-	flag.StringVar(&opts.addr, "addr", envOr("ATTENTIOND_ADDR", "127.0.0.1:7717"),
-		"loopback address to listen on")
-	flag.StringVar(&opts.publicURL, "public-url", os.Getenv("ATTENTIOND_PUBLIC_URL"),
-		"base URL consumers reach this daemon on, used to build action links (default http://<addr>)")
-	flag.StringVar(&opts.herdrSocket, "herdr-socket", "",
-		"path to the Herdr control socket (default: Herdr's own resolution order)")
-	flag.StringVar(&opts.herdrFixture, "herdr-fixture", os.Getenv("ATTENTIOND_HERDR_FIXTURE"),
-		"read a recorded `herdr api snapshot` from this file instead of a live Herdr server")
-	flag.DurationVar(&opts.herdrPoll, "herdr-poll", 2*time.Second,
-		"how often to poll Herdr for a session snapshot")
-	flag.BoolVar(&opts.githubEnabled, "github", true,
-		"poll GitHub for pull requests you authored or were asked to review")
-	flag.StringVar(&opts.githubAPI, "github-api", envOr("ATTENTIOND_GITHUB_API", github.DefaultEndpoint),
-		"GraphQL endpoint, for GitHub Enterprise")
-	flag.DurationVar(&opts.githubPoll, "github-poll", time.Minute,
-		"how often to poll GitHub")
-	flag.DurationVar(&opts.githubStale, "github-stale-draft", 14*24*time.Hour,
-		"how long a draft may sit untouched before it is reported as stale")
-	flag.IntVar(&opts.githubLimit, "github-limit", 100,
-		"maximum pull requests per search before the result is reported as incomplete")
-	flag.StringVar(&opts.githubRepos, "github-repos", os.Getenv("ATTENTIOND_GITHUB_REPOS"),
-		"only watch these repositories, comma separated `owner/name` (default: every repository the token can see)")
-	flag.StringVar(&opts.githubOrgs, "github-orgs", os.Getenv("ATTENTIOND_GITHUB_ORGS"),
-		"also watch every repository in these accounts, comma separated logins")
-	flag.DurationVar(&opts.eventTTL, "event-ttl", time.Hour,
-		"how long finished or failed items from /api/events stay visible")
-	flag.StringVar(&opts.logLevel, "log-level", envOr("ATTENTIOND_LOG_LEVEL", "info"),
-		"debug, info, warn or error")
-	flag.StringVar(&opts.logFormat, "log-format", envOr("ATTENTIOND_LOG_FORMAT", "text"),
-		"text or json")
+// resolveConfig layers the command line over the file over the defaults. The
+// file is the place settings live; the flags exist for the one-off run, so
+// only the flags actually typed are applied.
+func resolveConfig() (config.Config, string, error) {
+	var (
+		configPath = flag.String("config", "",
+			"configuration file (default $ATTENTIOND_CONFIG, then ~/.attn/config.toml)")
+		addr         = flag.String("addr", "", "loopback address to listen on")
+		publicURL    = flag.String("public-url", "", "base URL used to build action links")
+		logLevel     = flag.String("log-level", "", "debug, info, warn or error")
+		logFormat    = flag.String("log-format", "", "text or json")
+		eventTTL     = flag.Duration("event-ttl", 0, "how long finished event items stay visible")
+		herdrSocket  = flag.String("herdr-socket", "", "path to the Herdr control socket")
+		herdrFixture = flag.String("herdr-fixture", "",
+			"read a recorded `herdr api snapshot` from this file instead of a live Herdr server")
+		herdrPoll   = flag.Duration("herdr-poll", 0, "how often to poll Herdr")
+		githubOff   = flag.Bool("no-github", false, "skip the GitHub source for this run")
+		githubPoll  = flag.Duration("github-poll", 0, "how often to poll GitHub")
+		githubRepos = flag.String("github-repos", "",
+			"only watch these repositories, comma separated `owner/name`")
+		githubOrgs = flag.String("github-orgs", "",
+			"also watch every repository in these accounts, comma separated logins")
+		githubLimit = flag.Int("github-limit", 0,
+			"pull requests per search before the result is reported as incomplete")
+	)
 	flag.Parse()
-	return opts
+
+	path := *configPath
+	explicit := path != ""
+	if !explicit {
+		path = config.DefaultPath()
+	}
+	cfg, found, err := config.Load(path, explicit)
+	if err != nil {
+		return config.Config{}, "", err
+	}
+	if !found {
+		path = ""
+	}
+
+	var flagErr error
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "addr":
+			cfg.Daemon.Addr = *addr
+		case "public-url":
+			cfg.Daemon.PublicURL = *publicURL
+		case "log-level":
+			cfg.Daemon.LogLevel = *logLevel
+		case "log-format":
+			cfg.Daemon.LogFormat = *logFormat
+		case "event-ttl":
+			cfg.Events.TTL = config.Duration(*eventTTL)
+		case "herdr-socket":
+			cfg.Herdr.Socket = *herdrSocket
+		case "herdr-fixture":
+			cfg.Herdr.Fixture = *herdrFixture
+		case "herdr-poll":
+			cfg.Herdr.Poll = config.Duration(*herdrPoll)
+		case "no-github":
+			cfg.GitHub.Enabled = !*githubOff
+		case "github-poll":
+			cfg.GitHub.Poll = config.Duration(*githubPoll)
+		case "github-limit":
+			cfg.GitHub.Limit = *githubLimit
+		case "github-repos", "github-orgs":
+			scope, err := github.ParseScope(*githubRepos, *githubOrgs)
+			if err != nil {
+				flagErr = err
+				return
+			}
+			cfg.GitHub.Repos = scope.Repos
+			cfg.GitHub.Orgs = scope.Orgs
+		}
+	})
+	if flagErr != nil {
+		return config.Config{}, "", flagErr
+	}
+
+	return cfg, path, nil
 }
 
-func newLogger(opts options) (*slog.Logger, error) {
+// sourceNames lists the registered adapters for the startup line.
+func sourceNames(sources map[string]func() attention.SourceStatus) []string {
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func newLogger(cfg config.Daemon) (*slog.Logger, error) {
 	var level slog.Level
-	if err := level.UnmarshalText([]byte(opts.logLevel)); err != nil {
-		return nil, fmt.Errorf("invalid log level %q", opts.logLevel)
+	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
+		return nil, fmt.Errorf("invalid log level %q", cfg.LogLevel)
 	}
 
 	handlerOpts := &slog.HandlerOptions{Level: level}
-	switch opts.logFormat {
+	switch cfg.LogFormat {
 	case "json":
 		return slog.New(slog.NewJSONHandler(os.Stderr, handlerOpts)), nil
 	case "text":
 		return slog.New(slog.NewTextHandler(os.Stderr, handlerOpts)), nil
 	default:
-		return nil, fmt.Errorf("invalid log format %q, expected text or json", opts.logFormat)
+		return nil, fmt.Errorf("invalid log format %q, expected text or json", cfg.LogFormat)
 	}
 }
 
@@ -253,11 +302,4 @@ func requireLoopback(addr string) error {
 		return fmt.Errorf("address %q is not loopback; attentiond is localhost-only", addr)
 	}
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
 }

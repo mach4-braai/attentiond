@@ -139,26 +139,39 @@ type Scope struct {
 	Orgs []string
 }
 
-// ParseScope reads comma or space separated lists and rejects anything that
-// would silently change what is searched. A typo has to fail loudly: a
-// qualifier GitHub does not understand narrows the queue to nothing, and an
-// empty attention queue looks exactly like having nothing to do.
-func ParseScope(repos, orgs string) (Scope, error) {
+// NewScope validates already-split lists, which is what a config file hands
+// over. A typo has to fail loudly: a qualifier GitHub does not understand
+// narrows the queue to nothing, and an empty attention queue looks exactly
+// like having nothing to do.
+func NewScope(repos, orgs []string) (Scope, error) {
 	var scope Scope
-	for _, repo := range splitList(repos) {
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
 		owner, name, ok := strings.Cut(repo, "/")
 		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
 			return Scope{}, fmt.Errorf("github repo %q is not owner/name", repo)
 		}
 		scope.Repos = append(scope.Repos, repo)
 	}
-	for _, org := range splitList(orgs) {
+	for _, org := range orgs {
+		org = strings.TrimSpace(org)
+		if org == "" {
+			continue
+		}
 		if strings.ContainsAny(org, "/ ") {
 			return Scope{}, fmt.Errorf("github org %q is not an account login", org)
 		}
 		scope.Orgs = append(scope.Orgs, org)
 	}
 	return scope, nil
+}
+
+// ParseScope reads the comma or space separated form a command line uses.
+func ParseScope(repos, orgs string) (Scope, error) {
+	return NewScope(splitList(repos), splitList(orgs))
 }
 
 // Empty reports whether the scope watches everything.

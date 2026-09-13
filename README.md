@@ -18,25 +18,48 @@ go run ./cmd/attentiond                 # against a live Herdr server
 go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json
 ```
 
-Flags, all with environment equivalents where it helps:
+## Configuration
 
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `--addr` | `127.0.0.1:7717` | listen address, must be loopback |
-| `--public-url` | `http://<addr>` | base URL used to build action links |
-| `--herdr-socket` | Herdr's own resolution order | explicit control socket path |
-| `--herdr-fixture` | none | read a recorded snapshot instead of a live server |
-| `--herdr-poll` | `2s` | snapshot interval |
-| `--github` | `true` | poll GitHub; skipped anyway when no credential resolves |
-| `--github-poll` | `1m` | GitHub poll interval |
-| `--github-stale-draft` | `336h` | how long a draft may sit before it is called stale |
-| `--github-repos` | none | only watch these `owner/name` repositories, comma separated |
-| `--github-orgs` | none | also watch every repository in these accounts |
-| `--github-limit` | `100` | pull requests per search before the result is reported incomplete |
-| `--github-api` | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise |
-| `--event-ttl` | `1h` | how long finished event items stay visible |
-| `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
-| `--log-format` | `text` | `text` or `json` |
+Settings live in a file, not on a command line, so a new source means a new
+table rather than a longer invocation. attentiond reads, in order: `--config`,
+`$ATTENTIOND_CONFIG`, then `~/.attn/config.toml`. No file at all is fine; the
+defaults below are what runs.
+
+```toml
+[daemon]
+addr = "127.0.0.1:7717"        # must be loopback
+# public_url = ""              # default http://<addr>, used to build action links
+log_level = "info"             # debug, info, warn, error
+log_format = "text"            # text or json
+
+[events]
+ttl = "1h"                     # how long finished /api/events items stay visible
+
+[herdr]
+enabled = true
+poll = "2s"
+# socket = ""                  # default: Herdr's own resolution order
+# fixture = ""                 # replay a recorded snapshot instead of a live server
+
+[github]
+enabled = true
+poll = "1m"
+repos = []                     # owner/name; empty means every repository the token sees
+orgs = []                      # account logins
+stale_draft_after = "336h"
+limit = 100                    # per search, before the result is reported incomplete
+# api = "https://api.github.com/graphql"   # for GitHub Enterprise
+```
+
+A file only has to say what it changes; anything absent keeps its default. A
+key attentiond does not know fails startup, because a key that is silently
+ignored leaves the file claiming one thing and the daemon doing another.
+
+Flags override the file for a single run and are deliberately few:
+`--config`, `--addr`, `--public-url`, `--log-level`, `--log-format`,
+`--event-ttl`, `--herdr-socket`, `--herdr-fixture`, `--herdr-poll`,
+`--no-github`, `--github-poll`, `--github-repos`, `--github-orgs`,
+`--github-limit`. Only flags actually typed are applied.
 
 Record a fixture from a running Herdr with `herdr api snapshot > testdata/session-snapshot.json`.
 
@@ -211,15 +234,19 @@ carries the error either way.
 
 ### Watching fewer repositories
 
-Every repository your token can see is a lot of repositories. Narrow it:
+Every repository your token can see is a lot of repositories. Narrow it in
+`[github]`:
 
-```bash
-attentiond --github-orgs didx-xyz,mach4-braai --github-repos mcgeerdev/portfolio
+```toml
+[github]
+orgs = ["didx-xyz", "mach4-braai"]
+repos = ["mcgeerdev/portfolio"]
 ```
 
-`ATTENTIOND_GITHUB_REPOS` and `ATTENTIOND_GITHUB_ORGS` do the same. Repeating a
-qualifier is how GitHub search spells OR, so repositories and accounts union
-rather than intersect, and the scope applies to both searches.
+Repeating a qualifier is how GitHub search spells OR, so repositories and
+accounts union rather than intersect, and the scope applies to both searches.
+`--github-repos` and `--github-orgs` take the same values comma separated, for
+a one-off run.
 
 A malformed entry fails startup rather than being ignored. GitHub answers an
 unmatched qualifier with an empty result, and an empty attention queue is
