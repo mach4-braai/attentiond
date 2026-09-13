@@ -122,4 +122,8 @@ type SourceStatus struct {
 	Items       int        `json:"items"`
 	LastSuccess *time.Time `json:"last_success,omitempty"`
 	LastError   string     `json:"last_error,omitempty"`
+	// Warning is set when a poll succeeded but the result is known to be
+	// incomplete. Healthy stays true: the adapter works, the answer does not
+	// cover everything.
+	Warning string `json:"warning,omitempty"`
 }

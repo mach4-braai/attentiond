@@ -97,6 +97,38 @@ func TestEventBecomesVisibleWork(t *testing.T) {
 	}
 }
 
+func TestAnIncompleteSourceWarnsWhereTheListIsRead(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := attention.NewStore(log, time.Hour)
+	handler := New(Config{
+		Store: store,
+		Sources: map[string]func() attention.SourceStatus{
+			"github": func() attention.SourceStatus {
+				return attention.SourceStatus{
+					Mode: "graphql", Healthy: true, Items: 30,
+					Warning: "more than 30 pull requests matched a search",
+				}
+			},
+			"herdr": func() attention.SourceStatus {
+				return attention.SourceStatus{Mode: "socket", Healthy: true}
+			},
+		},
+		Version: "test",
+		Started: time.Now(),
+		Log:     log,
+	})
+
+	for _, path := range []string{"/api/work", "/api/attention"} {
+		response := decodeList(t, do(t, handler, http.MethodGet, path, ""))
+		if len(response.Warnings) != 1 {
+			t.Fatalf("%s warnings = %v, want the truncated source named", path, response.Warnings)
+		}
+		if !strings.HasPrefix(response.Warnings[0], "github: ") {
+			t.Errorf("%s warning = %q, want the source name in front", path, response.Warnings[0])
+		}
+	}
+}
+
 func TestEventLifecycleUpdatesTheSameItem(t *testing.T) {
 	handler, _, _ := newTestServer(t)
 
