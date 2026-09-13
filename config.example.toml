@@ -1,0 +1,83 @@
+# attentiond example configuration.
+#
+# Copy to ~/.attn/config.toml and edit. attentiond reads --config, then
+# $ATTENTIOND_CONFIG, then ~/.attn/config.toml. The first two are explicit: if
+# you name a file that is not there, the daemon exits rather than guessing.
+#
+#   Herdr / OMP ──┐
+#   shell / tofu ─┤
+#   GitHub ───────┼──▶ attentiond ──▶ Glance
+#   future tools ─┘
+#
+# Every key below shows its default, so a real config only needs the lines it
+# changes. A key attentiond does not recognise fails startup: a typo that is
+# silently ignored leaves this file claiming one thing while the daemon does
+# another.
+#
+# Sources that poll something get a table. Anything that reports its own
+# lifecycle, a build wrapper, a tofu run, a test script, posts to /api/events
+# and needs no configuration beyond [events].
+
+[daemon]
+# Listen address. Must be loopback; attentiond has no authentication because it
+# has no reason to leave this machine.
+addr = "127.0.0.1:7717"
+
+# Base URL consumers reach the daemon on, used to build the action links inside
+# items. Defaults to http://<addr>. Set it when something in front rewrites the
+# host, such as a container reaching the host by another name.
+# public_url = "http://127.0.0.1:7717"
+
+log_level = "info"   # debug, info, warn, error
+log_format = "text"  # text or json
+
+[events]
+# How long items that reached completed or failed through POST /api/events stay
+# visible. Adapter-owned items ignore this: they live and die with each poll.
+ttl = "1h"
+
+[herdr]
+# Herdr's agent states (working, idle, blocked, done) arrive over its local
+# socket. On by default: it is local, it costs one socket call, and it is the
+# reason this daemon exists. Herdr not running is a normal state, not an error.
+enabled = true
+poll = "2s"
+
+# Control socket. Empty uses Herdr's own resolution order: $HERDR_SOCKET_PATH,
+# the socket for $HERDR_SESSION, then the default session socket.
+# socket = ""
+
+# Replay a recorded snapshot instead of talking to a live server, for working on
+# the dashboard with no agents running:
+#   herdr api snapshot > testdata/session-snapshot.json
+# Focus actions return 503 in this mode, because there is nothing to focus.
+# fixture = ""
+
+[github]
+# Off by default. An enabled GitHub source with no repos or orgs watches every
+# repository the token can see, so it waits to be asked.
+#
+# The credential is found, not configured: $GITHUB_TOKEN, then $GH_TOKEN, then
+# `gh auth token`. Never put a token in this file.
+enabled = false
+poll = "1m"
+
+# What to watch. Both lists are OR'd, so repositories and accounts union rather
+# than intersect. Leaving both empty means every repository the token can see.
+# A malformed entry fails startup: GitHub answers an unmatched qualifier with an
+# empty result, and an empty attention queue looks exactly like having nothing
+# to do.
+repos = ["owner/name"]
+orgs = ["your-org"]
+
+# A draft untouched for longer than this is reported as a stale draft rather
+# than a plain draft. Drafts never enter the attention queue either way.
+stale_draft_after = "336h"  # 14 days
+
+# Pull requests per search before the result is called incomplete. Reaching it
+# sets a warning that travels with the data, in /health and in the warnings
+# array on /api/work and /api/attention, so a capped list can say it is capped.
+limit = 100
+
+# GraphQL endpoint. GitHub Enterprise lives at https://<host>/api/graphql.
+# api = "https://api.github.com/graphql"
