@@ -21,9 +21,12 @@ go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json
 ## Configuration
 
 Settings live in a file, not on a command line, so a new source means a new
-table rather than a longer invocation. attentiond reads, in order: `--config`,
-`$ATTENTIOND_CONFIG`, then `~/.attn/config.toml`. No file at all is fine; the
-defaults below are what runs.
+table rather than a longer invocation. attentiond reads `--config`, then
+`$ATTENTIOND_CONFIG`, then `~/.attn/config.toml`.
+
+The first two are explicit: somebody named a file, so a missing one is an
+error. Only the implicit `~/.attn/config.toml` may be absent, and then the
+defaults below run.
 
 ```toml
 [daemon]
@@ -42,7 +45,7 @@ poll = "2s"
 # fixture = ""                 # replay a recorded snapshot instead of a live server
 
 [github]
-enabled = true
+enabled = false                # see below
 poll = "1m"
 repos = []                     # owner/name; empty means every repository the token sees
 orgs = []                      # account logins
@@ -54,6 +57,11 @@ limit = 100                    # per search, before the result is reported incom
 A file only has to say what it changes; anything absent keeps its default. A
 key attentiond does not know fails startup, because a key that is silently
 ignored leaves the file claiming one thing and the daemon doing another.
+
+GitHub defaults to off. An unconfigured GitHub source watches every repository
+the token can see, and that is also what a machine would fall back to if its
+config file went missing, so it waits to be asked. Herdr defaults to on: it is
+local, it costs one socket call, and it is the reason the daemon exists.
 
 Flags override the file for a single run and are deliberately few:
 `--config`, `--addr`, `--public-url`, `--log-level`, `--log-format`,

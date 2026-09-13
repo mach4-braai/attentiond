@@ -104,10 +104,16 @@ func TestLoadTreatsAMissingFileAsAbsentOnlyWhenItWasNotAskedFor(t *testing.T) {
 	}
 }
 
-func TestDefaultPathPrefersTheEnvironment(t *testing.T) {
+func TestResolvePathTreatsAnEnvironmentPathAsAskedFor(t *testing.T) {
 	t.Setenv("ATTENTIOND_CONFIG", "/tmp/somewhere.toml")
-	if got := DefaultPath(); got != "/tmp/somewhere.toml" {
-		t.Errorf("DefaultPath() = %q", got)
+	path, explicit := ResolvePath("")
+	if path != "/tmp/somewhere.toml" || !explicit {
+		t.Errorf("ResolvePath() = %q, %v", path, explicit)
+	}
+
+	path, explicit = ResolvePath("/tmp/flag.toml")
+	if path != "/tmp/flag.toml" || !explicit {
+		t.Errorf("--config lost to the environment: %q, %v", path, explicit)
 	}
 
 	t.Setenv("ATTENTIOND_CONFIG", "")
@@ -115,7 +121,38 @@ func TestDefaultPathPrefersTheEnvironment(t *testing.T) {
 	if err != nil {
 		t.Skip("no home directory")
 	}
-	if got, want := DefaultPath(), filepath.Join(home, ".attn", "config.toml"); got != want {
-		t.Errorf("DefaultPath() = %q, want %q", got, want)
+	path, explicit = ResolvePath("")
+	if want := filepath.Join(home, ".attn", "config.toml"); path != want || explicit {
+		t.Errorf("ResolvePath() = %q, %v, want %q, false", path, explicit, want)
+	}
+}
+
+func TestAMissingEnvironmentPathFailsInsteadOfFallingBack(t *testing.T) {
+	// Falling back here would drop the repository scope and start watching
+	// every repository the token can see, which is the opposite of what the
+	// missing file said.
+	missing := filepath.Join(t.TempDir(), "gone.toml")
+	t.Setenv("ATTENTIOND_CONFIG", missing)
+
+	path, explicit := ResolvePath("")
+	if !explicit {
+		t.Fatal("an environment path was treated as implicit")
+	}
+	if _, _, err := Load(path, explicit); err == nil {
+		t.Error("a missing $ATTENTIOND_CONFIG file was accepted")
+	}
+}
+
+func TestGitHubIsOffUntilAFileTurnsItOn(t *testing.T) {
+	if Default().GitHub.Enabled {
+		t.Error("an unconfigured daemon would watch every repository the token can see")
+	}
+
+	cfg, _, err := Load(write(t, "[github]\nenabled = true\norgs = [\"didx-xyz\"]\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.GitHub.Enabled || len(cfg.GitHub.Orgs) != 1 {
+		t.Errorf("github = %+v", cfg.GitHub)
 	}
 }

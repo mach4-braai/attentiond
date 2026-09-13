@@ -46,7 +46,9 @@ func run() error {
 	if configPath != "" {
 		logger.Info("configuration loaded", "path", configPath)
 	} else {
-		logger.Info("no configuration file, running on defaults", "looked_at", config.DefaultPath())
+		looked, _ := config.ResolvePath("")
+		logger.Warn("no configuration file, running on defaults",
+			"looked_at", looked, "github", "off until a config file turns it on")
 	}
 
 	if err := requireLoopback(cfg.Daemon.Addr); err != nil {
@@ -205,11 +207,7 @@ func resolveConfig() (config.Config, string, error) {
 	)
 	flag.Parse()
 
-	path := *configPath
-	explicit := path != ""
-	if !explicit {
-		path = config.DefaultPath()
-	}
+	path, explicit := config.ResolvePath(*configPath)
 	cfg, found, err := config.Load(path, explicit)
 	if err != nil {
 		return config.Config{}, "", err

@@ -77,8 +77,13 @@ type GitHub struct {
 	StaleDraftAfter Duration `toml:"stale_draft_after"`
 }
 
-// Default is the configuration attentiond runs with when no file exists. The
-// daemon has to be useful on a machine that never wrote one.
+// Default is the configuration attentiond runs with when no file exists.
+//
+// Herdr is on: it is local, it costs one socket call, and it is the reason the
+// daemon exists. GitHub is off. An unconfigured GitHub source watches every
+// repository the token can see, which is a fan-out nobody asked for, and it
+// would be exactly what a machine falls back to when its config file goes
+// missing. Turning it on is a sentence in a file.
 func Default() Config {
 	return Config{
 		Daemon: Daemon{
@@ -92,7 +97,7 @@ func Default() Config {
 			Poll:    Duration(2 * time.Second),
 		},
 		GitHub: GitHub{
-			Enabled:         true,
+			Enabled:         false,
 			API:             "https://api.github.com/graphql",
 			Poll:            Duration(time.Minute),
 			Limit:           100,
@@ -101,17 +106,22 @@ func Default() Config {
 	}
 }
 
-// DefaultPath is where attentiond looks when nothing says otherwise:
-// $ATTENTIOND_CONFIG, then ~/.attn/config.toml.
-func DefaultPath() string {
-	if path := strings.TrimSpace(os.Getenv("ATTENTIOND_CONFIG")); path != "" {
-		return path
+// ResolvePath decides which file to read. A path named by --config or by
+// $ATTENTIOND_CONFIG is explicit: somebody pointed at a file, so its absence
+// is a mistake, not a machine that has not been configured yet. Only the
+// implicit ~/.attn/config.toml is allowed to be missing.
+func ResolvePath(flagPath string) (path string, explicit bool) {
+	if trimmed := strings.TrimSpace(flagPath); trimmed != "" {
+		return trimmed, true
+	}
+	if env := strings.TrimSpace(os.Getenv("ATTENTIOND_CONFIG")); env != "" {
+		return env, true
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return filepath.Join(home, ".attn", "config.toml")
+	return filepath.Join(home, ".attn", "config.toml"), false
 }
 
 // Load reads path on top of the defaults, so a file only has to say what it
