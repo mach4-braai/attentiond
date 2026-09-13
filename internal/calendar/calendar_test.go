@@ -38,18 +38,17 @@ func TestExpandKeepsMeetingsAndDropsTheRest(t *testing.T) {
 	for _, occurrence := range got {
 		summaries = append(summaries, occurrence.Summary)
 	}
-	want := []string{"Platform standup", "Architecture review"}
+	want := []string{"Platform standup", "Design sync", "Architecture review"}
 	if strings.Join(summaries, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v, want %v", summaries, want)
 	}
-	// Dropped, in order: an all-day event (nothing to be early for), a
-	// cancelled one, and one outside the horizon.
+	// Dropped: an all-day event (nothing to be early for), a cancelled one,
+	// and one outside the horizon.
 }
 
 func TestExpandWalksARecurrenceAndHonoursItsExceptions(t *testing.T) {
-	// A week from Monday morning: five weekday standups minus the Wednesday
-	// that carries an EXDATE, plus the review on Monday.
-	got := Expand(fixture(t), "work", monday, 7*24*time.Hour)
+	// Monday to Friday, with Wednesday carrying an EXDATE.
+	got := Expand(fixture(t), "work", monday, 5*24*time.Hour)
 
 	var standups []time.Time
 	for _, occurrence := range got {
@@ -57,16 +56,69 @@ func TestExpandWalksARecurrenceAndHonoursItsExceptions(t *testing.T) {
 			standups = append(standups, occurrence.Start.UTC())
 		}
 	}
-	if len(standups) != 4 {
-		t.Fatalf("got %d standups, want 4 weekdays with Wednesday excluded: %v", len(standups), standups)
-	}
 	for _, at := range standups {
 		if at.Weekday() == time.Wednesday {
 			t.Errorf("the EXDATE instance came back: %s", at)
 		}
-		if at.Hour() != 9 {
-			t.Errorf("instance at the wrong time: %s", at)
+	}
+	if len(standups) != 3 {
+		t.Fatalf("got %d standups, want Monday, Tuesday and the moved Thursday: %v", len(standups), standups)
+	}
+}
+
+func TestExpandFollowsAnInstanceThatMoved(t *testing.T) {
+	// Thursday's standup was moved from 09:00 to 11:00, which the calendar
+	// writes as a second VEVENT with the same UID and a RECURRENCE-ID. Both
+	// times showing would send you to an empty room.
+	got := Expand(fixture(t), "work", monday, 5*24*time.Hour)
+
+	thursday := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	var hours []int
+	for _, occurrence := range got {
+		at := occurrence.Start.UTC()
+		if occurrence.UID == "standup@didx" && at.YearDay() == thursday.YearDay() {
+			hours = append(hours, at.Hour())
 		}
+	}
+	if len(hours) != 1 || hours[0] != 11 {
+		t.Fatalf("Thursday hours = %v, want only the moved 11:00", hours)
+	}
+}
+
+func TestExpandDropsAnInstanceThatWasCancelled(t *testing.T) {
+	// Friday's standup is cancelled by an override. The rule still generates
+	// it, so the override has to suppress it.
+	got := Expand(fixture(t), "work", monday, 5*24*time.Hour)
+
+	for _, occurrence := range got {
+		at := occurrence.Start.UTC()
+		if occurrence.UID == "standup@didx" && at.Weekday() == time.Friday {
+			t.Fatalf("a cancelled instance is still on the calendar: %s", at)
+		}
+	}
+}
+
+func TestExpandReadsAnExclusionInItsOwnTimezone(t *testing.T) {
+	// EXDATE;TZID=Africa/Johannesburg:20260915T120000 is 10:00 UTC. Reading it
+	// as UTC would exclude nothing and leave Tuesday's sync on the board.
+	got := Expand(fixture(t), "work", monday, 5*24*time.Hour)
+
+	var days []int
+	for _, occurrence := range got {
+		if occurrence.UID == "design@didx" {
+			days = append(days, occurrence.Start.UTC().Day())
+			if hour := occurrence.Start.UTC().Hour(); hour != 10 {
+				t.Errorf("instance at %02d:00 UTC, want 10:00 for a 12:00 SAST meeting", hour)
+			}
+		}
+	}
+	for _, day := range days {
+		if day == 15 {
+			t.Error("the zoned EXDATE did not exclude Tuesday")
+		}
+	}
+	if len(days) != 4 {
+		t.Fatalf("got %d design syncs, want 5 daily minus the excluded one: %v", len(days), days)
 	}
 }
 
@@ -122,13 +174,15 @@ func TestNormalizeCarriesTheJoinLinkAndSortsByStart(t *testing.T) {
 	cfg := Config{Horizon: 12 * time.Hour, Lead: 10 * time.Minute}
 	items := Normalize(Expand(fixture(t), "work", monday, cfg.Horizon), cfg, monday)
 
-	if len(items) != 2 {
+	if len(items) != 3 {
 		t.Fatalf("got %d items", len(items))
 	}
 	// Ids lead with the start time, and the store breaks severity ties on id,
 	// so the next meeting is the one at the top.
-	if items[0].ID >= items[1].ID {
-		t.Errorf("ids do not sort chronologically: %q then %q", items[0].ID, items[1].ID)
+	for i := 1; i < len(items); i++ {
+		if items[i-1].ID >= items[i].ID {
+			t.Errorf("ids do not sort chronologically: %q then %q", items[i-1].ID, items[i].ID)
+		}
 	}
 
 	standup := items[0]
@@ -142,11 +196,15 @@ func TestNormalizeCarriesTheJoinLinkAndSortsByStart(t *testing.T) {
 		t.Errorf("actions = %+v, want the Meet link from LOCATION", standup.Actions)
 	}
 
-	review := items[1]
+	review := items[2]
+	if review.Title != "Architecture review" {
+		t.Fatalf("last item = %q", review.Title)
+	}
 	if len(review.Actions) != 1 || review.Actions[0].Href != "https://meet.google.com/zzz-yyyy-xxx" {
 		t.Errorf("actions = %+v, want the link from URL", review.Actions)
 	}
 }
+
 func TestResolveFeedsWorksOutEachAddress(t *testing.T) {
 	env := map[string]string{"CAL_SECRET": "https://example.com/private-abc/basic.ics"}
 	getenv := func(key string) string { return env[key] }
@@ -171,6 +229,23 @@ func TestResolveFeedsWorksOutEachAddress(t *testing.T) {
 	}
 	if feeds[0].Label != "devan.mcgeer@didx.co.za" {
 		t.Errorf("label should fall back to the email, got %q", feeds[0].Label)
+	}
+}
+
+func TestFetchKeepsAMalformedAddressOutOfErrorsToo(t *testing.T) {
+	// A secret address with a stray control character never reaches the
+	// transport: NewRequest rejects it, and url.Error quotes what it was
+	// given. That is the second way a bearer URL can reach a log line.
+	secret := "https://calendar.example.com/private-SECRETTOKEN/basic.ics\n"
+	_, err := NewClient(time.Second).Fetch(context.Background(), Feed{Label: "work", URL: secret})
+	if err == nil {
+		t.Fatal("a malformed address was accepted")
+	}
+	if strings.Contains(err.Error(), "SECRETTOKEN") {
+		t.Errorf("the secret address leaked into an error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "work") {
+		t.Errorf("error = %v, want the feed label so it can be found", err)
 	}
 }
 

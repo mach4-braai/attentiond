@@ -107,7 +107,9 @@ func NewClient(timeout time.Duration) *Client {
 func (c *Client) Fetch(ctx context.Context, feed Feed) (*ics.Calendar, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", feed.Label, err)
+		// url.Error quotes the address it failed to parse, so this one is
+		// replaced rather than wrapped, the same as the transport error below.
+		return nil, fmt.Errorf("%s: address is not a usable URL", feed.Label)
 	}
 
 	resp, err := c.http.Do(req)
