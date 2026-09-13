@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
@@ -49,10 +50,26 @@ func New(cfg Config) http.Handler {
 }
 
 type listResponse struct {
-	GeneratedAt    time.Time        `json:"generated_at"`
-	Count          int              `json:"count"`
-	AttentionCount int              `json:"attention_count"`
-	Items          []attention.Item `json:"items"`
+	GeneratedAt    time.Time `json:"generated_at"`
+	Count          int       `json:"count"`
+	AttentionCount int       `json:"attention_count"`
+	// Warnings carry adapter caveats to the consumer. A list that is known to
+	// be incomplete has to say so where it is read, not only in /health, which
+	// nobody has open.
+	Warnings []string         `json:"warnings,omitempty"`
+	Items    []attention.Item `json:"items"`
+}
+
+// warnings collects the degraded-but-working notices from every adapter.
+func (s *server) warnings() []string {
+	var warnings []string
+	for name, status := range s.cfg.Sources {
+		if warning := status().Warning; warning != "" {
+			warnings = append(warnings, name+": "+warning)
+		}
+	}
+	sort.Strings(warnings)
+	return warnings
 }
 
 func (s *server) work(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +84,7 @@ func (s *server) work(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:    time.Now().UTC(),
 		Count:          len(items),
 		AttentionCount: attentionCount,
+		Warnings:       s.warnings(),
 		Items:          items,
 	})
 }
@@ -77,6 +95,7 @@ func (s *server) attention(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:    time.Now().UTC(),
 		Count:          len(items),
 		AttentionCount: len(items),
+		Warnings:       s.warnings(),
 		Items:          items,
 	})
 }

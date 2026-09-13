@@ -5,9 +5,10 @@ Local daemon holding one normalized view of what currently needs attention: it t
 It is not a frontend. It holds state and answers questions about it.
 
 ```
-Herdr ──socket──▶ attentiond ──HTTP/JSON──▶ Glance
-                       ▲
-       local processes ┘  POST /api/events
+ Herdr ──socket───▶
+GitHub ──GraphQL──▶ attentiond ──HTTP/JSON──▶ Glance
+                         ▲
+         local processes ┘  POST /api/events
 ```
 
 ## Run it
@@ -26,6 +27,13 @@ Flags, all with environment equivalents where it helps:
 | `--herdr-socket` | Herdr's own resolution order | explicit control socket path |
 | `--herdr-fixture` | none | read a recorded snapshot instead of a live server |
 | `--herdr-poll` | `2s` | snapshot interval |
+| `--github` | `true` | poll GitHub; skipped anyway when no credential resolves |
+| `--github-poll` | `1m` | GitHub poll interval |
+| `--github-stale-draft` | `336h` | how long a draft may sit before it is called stale |
+| `--github-repos` | none | only watch these `owner/name` repositories, comma separated |
+| `--github-orgs` | none | also watch every repository in these accounts |
+| `--github-limit` | `100` | pull requests per search before the result is reported incomplete |
+| `--github-api` | `https://api.github.com/graphql` | GraphQL endpoint, for GitHub Enterprise |
 | `--event-ttl` | `1h` | how long finished event items stay visible |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error` |
 | `--log-format` | `text` | `text` or `json` |
@@ -158,6 +166,72 @@ Herdr never reports a failure, so `failed` only arrives through `/api/events`.
 The socket is found the way Herdr documents it: `--herdr-socket`, then
 `HERDR_SOCKET_PATH`, then the socket for `HERDR_SESSION`, then the default
 session socket under the Herdr config directory.
+
+## GitHub integration
+
+attentiond asks GitHub once a minute for the open pull requests you authored
+and the ones waiting on your review, and turns each into an item. One GraphQL
+request answers review decision, mergeability and check rollup together; the
+REST equivalent is three calls per pull request.
+
+The credential is found without asking: `GITHUB_TOKEN`, then `GH_TOKEN`, then
+`gh auth token`. No token means the source switches itself off with a warning,
+because a machine that never logged into `gh` should still get a daemon. The
+token is never logged and never leaves the process; `/health` names its origin,
+not its value.
+
+Each item carries the word a human uses for why it is there in
+`context.pr_state`, separate from the five lifecycle states:
+
+| `pr_state` | state | severity | when |
+| --- | --- | --- | --- |
+| `review requested` | `needs_attention` | warning | someone asked you, whatever the branch looks like |
+| `rebase required` | `needs_attention` | warning | `mergeStateStatus` is `DIRTY` or `BEHIND` |
+| `checks failing` | `failed` | warning | head commit rollup is `FAILURE` or `ERROR` |
+| `changes requested` | `needs_attention` | warning | a reviewer sent it back |
+| `checks running` | `working` | info | rollup is `PENDING` or `EXPECTED` |
+| `ready to merge` | `needs_attention` | warning | approved and `CLEAN` |
+| `approved` | `waiting` | info | approved but not mergeable yet |
+| `awaiting review` | `waiting` | info | nobody has looked yet |
+| `draft`, `stale draft` | `waiting` | info | drafts never enter the queue, however red |
+
+Order matters: the first condition that holds is the one reported, so the most
+actionable reason wins. A draft is a statement that it is not ready, so it is
+checked before anything else and stays out of the attention queue. `stale draft`
+needs `--github-stale-draft` to have elapsed since the last update.
+
+`mergeStateStatus` is the only field that separates "behind base" from
+"conflicting", and it still needs the `merge-info-preview` Accept header, which
+the client sends.
+
+Unlike the Herdr adapter, a failed poll keeps the last good result. Herdr being
+unreachable means those panes are gone; GitHub being unreachable says nothing
+about whether the pull requests still want you. `/health` turns unhealthy and
+carries the error either way.
+
+### Watching fewer repositories
+
+Every repository your token can see is a lot of repositories. Narrow it:
+
+```bash
+attentiond --github-orgs didx-xyz,mach4-braai --github-repos mcgeerdev/portfolio
+```
+
+`ATTENTIOND_GITHUB_REPOS` and `ATTENTIOND_GITHUB_ORGS` do the same. Repeating a
+qualifier is how GitHub search spells OR, so repositories and accounts union
+rather than intersect, and the scope applies to both searches.
+
+A malformed entry fails startup rather than being ignored. GitHub answers an
+unmatched qualifier with an empty result, and an empty attention queue is
+indistinguishable from having nothing to do.
+
+### Nothing is silently dropped
+
+Both searches page through cursors until they run out or `--github-limit` is
+reached. Hitting the limit sets a warning that travels with the data: `/health`
+carries it on the source, and `/api/work` and `/api/attention` carry it in
+`warnings`, so a consumer showing a capped list can say so. `healthy` stays
+true, because the adapter works; the answer is just not the whole answer.
 
 ## Glance
 
