@@ -1,3 +1,6 @@
+# `mise run build` output
+bin/
+
 .DS_Store
 Thumbs.db
 *.swp
