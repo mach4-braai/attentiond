@@ -4,12 +4,23 @@ Local daemon holding one normalized view of what currently needs attention: it t
 
 It is not a frontend. It holds state and answers questions about it.
 
+```mermaid
+flowchart LR
+    herdr["Herdr / OMP"] -- "socket" --> attentiond
+    shell["shell, tofu, CI"] -- "POST /api/events" --> attentiond
+    github["GitHub"] -- "GraphQL" --> attentiond
+    future["future tools"] -. "POST /api/events" .-> attentiond
+
+    attentiond["attentiond"] -- "HTTP/JSON" --> glance["Glance"]
+    glance -- "POST /api/actions/…" --> attentiond
+
+    attentiond -- "focus pane, tab, workspace" --> herdr
 ```
- Herdr ──socket───▶
-GitHub ──GraphQL──▶ attentiond ──HTTP/JSON──▶ Glance
-                         ▲
-         local processes ┘  POST /api/events
-```
+
+Sources push or are polled; Glance only reads and asks attentiond to act. The
+arrow back to Herdr is the whole point of the action route: a dashboard that
+tells you something needs you is half a tool unless it can also put you back
+in front of it.
 
 ## Run it
 
@@ -27,6 +38,13 @@ table rather than a longer invocation. attentiond reads `--config`, then
 The first two are explicit: somebody named a file, so a missing one is an
 error. Only the implicit `~/.attn/config.toml` may be absent, and then the
 defaults below run.
+
+[`config.example.toml`](config.example.toml) is the annotated version of what
+follows, ready to copy:
+
+```bash
+cp config.example.toml ~/.attn/config.toml
+```
 
 ```toml
 [daemon]
