@@ -60,9 +60,17 @@ func run() error {
 	}
 
 	started := time.Now()
+
+	statePath := strings.TrimSpace(cfg.Daemon.StateFile)
+	if statePath == "" {
+		statePath = attention.DefaultDecisionPath()
+	}
 	store := attention.NewStore(logger, attention.StoreConfig{
-		EventTTL:  cfg.Events.TTL.Std(),
-		TopLabels: labelSet(cfg.Attention.TopLabels),
+		EventTTL:     cfg.Events.TTL.Std(),
+		DoneTTL:      cfg.Attention.DoneTTL.Std(),
+		StaleAfter:   cfg.Attention.StaleAfter.Std(),
+		TopLabels:    labelSet(cfg.Attention.TopLabels),
+		DecisionPath: statePath,
 	})
 
 	sources := map[string]func() attention.SourceStatus{}
@@ -100,12 +108,14 @@ func run() error {
 	}
 
 	handler := httpapi.New(httpapi.Config{
-		Store:   store,
-		Sources: sources,
-		Actions: actions,
-		Version: version,
-		Started: started,
-		Log:     logger,
+		Store:     store,
+		Sources:   sources,
+		Actions:   actions,
+		PublicURL: cfg.Daemon.PublicURL,
+		SnoozeFor: cfg.Attention.SnoozeFor.Std(),
+		Version:   version,
+		Started:   started,
+		Log:       logger,
 	})
 
 	if herdrPoller != nil {
@@ -135,6 +145,10 @@ func run() error {
 		"public_url", cfg.Daemon.PublicURL,
 		"sources", strings.Join(sourceNames(sources), ","),
 		"event_ttl", cfg.Events.TTL.String(),
+		"done_ttl", cfg.Attention.DoneTTL.String(),
+		"stale_after", staleWord(cfg.Attention.StaleAfter),
+		"snooze_for", cfg.Attention.SnoozeFor.String(),
+		"state_file", statePath,
 		"top_labels", strings.Join(cfg.Attention.TopLabels, ","))
 
 	errs := make(chan error, 1)
@@ -174,6 +188,16 @@ func labelSet(labels []string) map[string]bool {
 		}
 	}
 	return set
+}
+
+// staleWord keeps the startup line honest about a stale list nobody turned on.
+// A zero duration prints as "0s", which reads like a setting rather than like
+// the feature being off.
+func staleWord(after config.Duration) string {
+	if after.Std() <= 0 {
+		return "off"
+	}
+	return after.String()
 }
 
 // newGitHubPoller returns nil when GitHub polling is off or no credential is

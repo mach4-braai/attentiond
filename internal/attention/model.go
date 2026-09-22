@@ -75,6 +75,11 @@ const (
 // adapters. The gaps are deliberate, so a source can slot something between
 // two ranks without renumbering the rest.
 const (
+	// PriorityBumped is an item a human put at the top by hand. It is above
+	// PriorityTop because it is the narrower statement of the same kind:
+	// top_labels promotes a class of work in a config file written once,
+	// this one promotes the item in front of you today.
+	PriorityBumped = 110
 	// PriorityTop is reserved for labels named in [attention] top_labels. No
 	// source sets it: it is the one rank that comes from configuration rather
 	// than from what the work is, for the case where you know something
@@ -197,6 +202,21 @@ type Item struct {
 	Context   map[string]string `json:"context,omitempty"`
 	UpdatedAt time.Time         `json:"updated_at"`
 	Actions   []Action          `json:"actions,omitempty"`
+
+	// Snoozed reports that a human deferred this item. It leaves the
+	// attention queue and keeps its place on the board, because work that
+	// disappears from every view is work you have lost rather than deferred.
+	Snoozed bool `json:"snoozed,omitempty"`
+	// SnoozedUntil is when it comes back. Absent on a snooze that lasts until
+	// the item's label changes.
+	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
+	// Bumped reports that a human raised this item to PriorityBumped.
+	Bumped bool `json:"bumped,omitempty"`
+	// Stale reports that nothing has happened to this item for longer than
+	// [attention] stale_after. It is served by /api/stale and by nothing
+	// else: a month-old pull request is archaeology, and leaving it on the
+	// board teaches you to skim the board.
+	Stale bool `json:"stale,omitempty"`
 
 	// expiresAt is set for terminal event items so a long-lived daemon does
 	// not accumulate finished builds. Adapter-owned items leave it zero.

@@ -14,3 +14,8 @@ var (
 	// the action right now.
 	ErrActionUnavailable = errors.New("action executor unavailable")
 )
+
+// ErrItemMissing means the store has no item with that id. A decision is made
+// about a live item, so this is the answer to snoozing something that has
+// already been merged, closed or dropped by its source.
+var ErrItemMissing = errors.New("item not found")

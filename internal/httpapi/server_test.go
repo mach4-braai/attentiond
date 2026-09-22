@@ -38,10 +38,12 @@ func newTestServer(t *testing.T) (http.Handler, *attention.Store, *recordingExec
 				return attention.SourceStatus{Mode: "fixture", Healthy: true, Items: 1}
 			},
 		},
-		Actions: map[string]Executor{"herdr": executor},
-		Version: "test",
-		Started: time.Now().Add(-time.Minute),
-		Log:     log,
+		Actions:   map[string]Executor{"herdr": executor},
+		PublicURL: "http://127.0.0.1:7717",
+		SnoozeFor: 4 * time.Hour,
+		Version:   "test",
+		Started:   time.Now().Add(-time.Minute),
+		Log:       log,
 	})
 	return handler, store, executor
 }
@@ -181,7 +183,7 @@ func TestEventURLBecomesAnOpenAction(t *testing.T) {
 
 	work := decodeList(t, do(t, handler, http.MethodGet, "/api/work", ""))
 	actions := work.Items[0].Actions
-	if len(actions) != 1 || actions[0].Href != "https://ci.example/build/7" {
+	if actions[0].ID != "open" || actions[0].Href != "https://ci.example/build/7" {
 		t.Fatalf("actions = %+v", actions)
 	}
 	if work.Items[0].Severity != attention.SeverityCritical {

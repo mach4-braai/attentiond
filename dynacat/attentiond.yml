@@ -99,6 +99,13 @@ pages:
             update-interval: 30s
             url: http://127.0.0.1:7717/api/work
             template: |
+              {{/* stale_count is what this list is not showing. A board that
+                   looks complete while holding work back is worse than one
+                   that admits it. */}}
+              {{ $stale := .JSON.Int "stale_count" }}
+              {{ if gt $stale 0 }}
+                <p class="size-h6 color-paragraph margin-bottom-10">{{ $stale }} stale, below</p>
+              {{ end }}
               {{ $items := .JSON.Array "items" }}
               {{ if eq (len $items) 0 }}
                 <p class="color-paragraph">Nothing in flight.</p>
@@ -114,10 +121,53 @@ pages:
                 {{ else if eq $tone "active" }}{{ $toneClass = "tone-active" }}{{ $glyph = "~" }}
                 {{ else if eq $tone "done" }}{{ $toneClass = "tone-done" }}{{ $glyph = "." }}
                 {{ end }}
+                {{/* A snoozed item is on the board and out of the queue. This
+                     is the only list that still shows it, so it carries both
+                     the mark and the way back: Wake and Unbump appear here
+                     and nowhere else, while Snooze and Bump stay in the
+                     queue above. A row with no decision gets no button. */}}
                 <li class="flex items-center gap-10">
                   <span class="size-h6 shrink-0 {{ $toneClass }}">{{ if $glyph }}{{ $glyph }} {{ end }}{{ .String "label" }}</span>
-                  <span class="grow text-truncate color-highlight">{{ .String "title" }}</span>
+                  <span class="grow text-truncate {{ if .Bool "snoozed" }}color-paragraph{{ else }}color-highlight{{ end }}">{{ if .Bool "snoozed" }}zz {{ end }}{{ if .Bool "bumped" }}^ {{ end }}{{ .String "title" }}</span>
                   <span class="size-h6 shrink-0 color-paragraph" {{ .String "updated_at" | parseTime "rfc3339" | toRelativeTime }}></span>
+                  {{ range .Array "actions" }}
+                  {{ $id := .String "id" }}
+                  {{ if or (eq $id "wake") (eq $id "unbump") }}
+                  <button type="button" class="size-h6 color-highlight shrink-0" style="background:none;border:0;padding:0;font:inherit;cursor:pointer"
+                    onclick="fetch('{{ .String "href" }}',{method:'POST',mode:'no-cors'});this.disabled=true">{{ .String "label" }}</button>
+                  {{ end }}
+                  {{ end }}
+                </li>
+                {{ end }}
+              </ul>
+              {{ end }}
+
+          - type: custom-api
+            title: Stale
+            cache: 30s
+            update-interval: 5m
+            url: http://127.0.0.1:7717/api/stale
+            template: |
+              {{/* Work nothing has happened to for longer than
+                   [attention] stale_after. Collapsed, slow to refresh, and
+                   last: this is the list you read on purpose. Bump pulls one
+                   back onto the board. */}}
+              {{ $items := .JSON.Array "items" }}
+              {{ if eq (len $items) 0 }}
+                <p class="color-paragraph">Nothing has been forgotten.</p>
+              {{ else }}
+              <ul class="list list-gap-10 collapsible-container" data-collapse-after="5">
+                {{ range $items }}
+                <li class="flex items-center gap-10">
+                  <span class="size-h6 shrink-0 color-paragraph">{{ .String "label" }}</span>
+                  <span class="grow text-truncate color-paragraph">{{ .String "title" }}</span>
+                  <span class="size-h6 shrink-0 color-paragraph" {{ .String "updated_at" | parseTime "rfc3339" | toRelativeTime }}></span>
+                  {{ range .Array "actions" }}
+                  {{ if eq (.String "id") "bump" }}
+                  <button type="button" class="color-highlight" style="background:none;border:0;padding:0;font:inherit;cursor:pointer"
+                    onclick="fetch('{{ .String "href" }}',{method:'POST',mode:'no-cors'});this.disabled=true">{{ .String "label" }}</button>
+                  {{ end }}
+                  {{ end }}
                 </li>
                 {{ end }}
               </ul>
