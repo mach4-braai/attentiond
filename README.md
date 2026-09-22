@@ -49,10 +49,14 @@ cp config.example.toml ~/.attn/config.toml
 [daemon]
 addr = "127.0.0.1:7717"        # must be loopback
 # public_url = ""              # default http://<addr>, used to build action links
+# state_file = ""              # default $XDG_STATE_HOME/attentiond/decisions.json
 log_level = "info"             # debug, info, warn, error
 log_format = "text"            # text or json
 
 [attention]
+done_ttl = "10m"               # how long done holds a place in /api/attention
+stale_after = "0"              # how old is too old; zero keeps everything on the board
+snooze_for = "4h"              # what the snooze button on each item offers
 top_labels = []                # labels that outrank every source's own ranking
 
 [events]
@@ -94,13 +98,19 @@ Record a fixture from a running Herdr with `herdr api snapshot > testdata/sessio
 
 ## API
 
-### `GET /api/work`, `GET /api/attention`
+### `GET /api/work`, `GET /api/attention`, `GET /api/stale`
 
-`/api/work` returns everything attentiond knows. `/api/attention` returns the
-subset that wants a human: `needs_attention`, `failed`, and `done`. Done is in
-there because finished work nobody has looked at is the point of the daemon;
-Herdr reports `done` only while a completed agent is unseen and drops it to
-`idle` once the pane is focused.
+`/api/work` is the board: everything attentiond holds that has not gone stale.
+`/api/attention` is the subset that wants a human now: `needs_attention`,
+`failed` and `done`, minus anything snoozed. `/api/stale` is the work nothing
+has happened to for longer than `[attention] stale_after`.
+
+Done is in the queue because finished work nobody has looked at is the point of
+the daemon, but not forever. Herdr reports `done` only while a completed agent
+is unseen and drops it to `idle` once the pane is focused, which means a pane
+you never click stays done for as long as it is open. `[attention] done_ttl` is
+how long that is allowed to hold a place in the queue, for every source. Past
+it the item leaves `/api/attention` and keeps appearing in `/api/work`.
 
 ```json
 {
@@ -177,6 +187,7 @@ alone leaves the queue in recency order. The ranks:
 
 | Rank | What sits there |
 | --- | --- |
+| 110 | an item somebody bumped by hand |
 | 100 | a label named in `[attention] top_labels`; no source sets this |
 | 50 | a meeting starting soon, the only work here with a deadline |
 | 40 | a pull request that is ready to merge |
@@ -186,15 +197,24 @@ alone leaves the queue in recency order. The ranks:
 | 5 | done and unread |
 | 0 | running, or somebody else's turn |
 
-Every rank but the top is a property of the work, which is why a source can
-decide it. `[attention] top_labels` is the judgement: it promotes a label to
-100 because you said so about a class of work. A saved OpenTofu plan nobody
-has approved is the case it exists for, since the lock is released but the
-change is not in, and an unapproved plan is easier to forget than a pull
-request sitting on a board.
+Every rank but the top two is a property of the work, which is why a source can
+decide it. The other two are judgements. `[attention] top_labels` promotes a
+label to 100 because you said so about a class of work: a saved OpenTofu plan
+nobody has approved is the case it exists for, since the lock is released but
+the change is not in, and an unapproved plan is easier to forget than a pull
+request sitting on a board. A bump is the same kind of statement about one
+item on one day, so it goes above.
 
-It is resolved before the queue is sorted, so the `priority` a consumer reads
-is the one it was ordered by. Matching folds case and surrounding space.
+Both are resolved before the queue is sorted, so the `priority` a consumer
+reads is the one it was ordered by. Matching folds case and surrounding space.
+
+Three fields carry what a human decided rather than what a source observed:
+
+| Field | What it means |
+| --- | --- |
+| `snoozed`, `snoozed_until` | deferred; out of `/api/attention`, still on the board. No `snoozed_until` means it lasts until the label changes |
+| `bumped` | raised to 110 by hand, and exempt from going stale |
+| `stale` | nothing has happened to it for longer than `stale_after`; served only by `/api/stale` |
 
 `attention` is derived from `state`, so a consumer never has to restate the
 rules.
@@ -242,6 +262,42 @@ Herdr supports `focus` for `workspace`, `tab`, and `pane`. Status codes: `404`
 when the target is gone, `400` for an action the adapter does not have, `503`
 when Herdr is unreachable or attentiond is running from a fixture.
 
+### `POST /api/items/{id}/{decision}`
+
+What a human says about one item, as opposed to what a source observed:
+`snooze`, `bump`, or `clear`. Every item carries these as actions, so a
+consumer posts the `href` it was given rather than building the path. The id is
+percent-encoded, because a GitHub item id is `github:didx-xyz/tofu#42` and
+contains both a slash and a fragment marker.
+
+```bash
+curl -sS -X POST 'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/snooze'
+curl -sS -X POST 'localhost:7717/api/items/herdr:w1:p1/snooze?for=30m'
+curl -sS -X POST 'localhost:7717/api/items/herdr:w1:p1/clear'
+```
+
+`?for=` overrides `[attention] snooze_for` for one request. `for=0` is the
+open-ended snooze: no deadline, and it lapses when the item's label changes.
+
+A snooze ends on three things: its deadline, its item's label moving, or
+`clear`. The label rule is the one that matters. A snooze answers a question
+about a word, so a pull request deferred as `review requested` comes straight
+back when it becomes `ready to merge`, which is new information rather than the
+thing you postponed.
+
+A bump survives its item's label moving, because "this one matters to me" is
+not a claim about what the work is doing. It ends with `clear`, or when the
+item's source stops reporting it.
+
+One decision per item: a bump replaces a snooze and a snooze replaces a bump.
+The response is the item as it now reads. Deciding about an id the daemon does
+not hold is `404`: the label a decision is made against comes from the item.
+
+Decisions are written to `[daemon] state_file` as they are made and reloaded at
+startup, expired snoozes dropped. Items are not persisted; every source rebuilds
+those within a poll, and no source can rebuild a decision you made. A file that
+cannot be read costs a warning rather than the daemon.
+
 ### `GET /health`
 
 Liveness plus per-adapter state. The daemon stays `ok` when an adapter is down,
@@ -253,6 +309,7 @@ because Herdr not running is normal.
   "version": "dev",
   "uptime_seconds": 143,
   "items": 4,
+  "decisions": 1,
   "sources": {
     "herdr": {"mode": "socket", "healthy": true, "items": 3, "last_success": "2026-09-12T12:00:00Z"}
   }
@@ -395,11 +452,26 @@ the data: `/health` carries it on the source, and `/api/work` and
 can say so. `healthy` stays true, because the adapter works; the answer is just
 not the whole answer.
 
+## Staleness
+
+`[attention] stale_after` is how long an item can go with nothing happening to
+it before it leaves the board for `/api/stale`. It is off until a file names a
+period.
+
+The clock is the item's own. For a pull request that is the last push, review
+or comment, so a month-old entry means a month of nobody touching the work, not
+a month of you ignoring the dashboard. A bump exempts an item, which is also
+how you pull one back out of the stale list.
+
+Nothing is dropped silently: `/api/work` carries `stale_count`, so a board that
+is not the whole picture says how much it is missing. This is the same promise
+the capped GitHub search makes through `warnings`.
+
 ## Dynacat
 
 `dynacat/attentiond.yml` is a runnable [Dynacat](https://github.com/Panonim/dynacat)
-config with two `custom-api` widgets: the attention queue with action buttons,
-and the full work list.
+config with three `custom-api` widgets: the attention queue with action
+buttons, the full work list, and the stale list.
 
 ```bash
 dynacat --config dynacat/attentiond.yml
@@ -412,15 +484,20 @@ order the daemon sent them.
 
 Action buttons send a `fetch`, not a form submission: Dynacat serves
 `form-action 'self'`, so a form posting to attentiond on another port is
-dropped by the browser before it leaves. Clicking Open focuses the Herdr pane
-without navigating the dashboard away. The widgets render whatever actions an
-item carries, so new controls arrive without the templates knowing what they
-are.
+dropped by the browser before it leaves. Clicking Open focuses the Herdr pane,
+and Snooze or Bump changes the queue, without navigating the dashboard away.
+The widgets render whatever actions an item carries, so new controls arrive
+without the templates knowing what they are.
 
-## State is in memory
+## What is kept, and where
 
-Herdr items are rebuilt from a snapshot within one poll of a restart and
-GitHub items within a minute. Event items are lost, which is the one real cost,
-and is acceptable while the producers are builds and tests someone is watching.
-See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning and for
-the rest of the MVP design.
+Items are in memory. Herdr items are rebuilt from a snapshot within one poll of
+a restart, GitHub items within a minute, and event items are lost, which is the
+one real cost and is acceptable while the producers are builds and tests
+someone is watching.
+
+Snoozes and bumps are on disk, in `[daemon] state_file`. They are the only
+state here that no source can reproduce: GitHub knows whether a pull request is
+mergeable, and nothing but this file knows you decided to leave it until
+Monday. See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning
+and for the rest of the MVP design.
