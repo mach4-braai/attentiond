@@ -287,10 +287,40 @@ session socket under the Herdr config directory.
 
 ## GitHub integration
 
-attentiond asks GitHub once a minute for the open pull requests you authored
-and the ones waiting on your review, and turns each into an item. One GraphQL
-request answers review decision, mergeability and check rollup together; the
-REST equivalent is three calls per pull request.
+attentiond asks GitHub once a minute for three sets of open pull requests and
+turns each into an item. One GraphQL request per set answers review decision,
+mergeability and check rollup together; the REST equivalent is three calls per
+pull request.
+
+| Search | `context.role` | Why it is there |
+| --- | --- | --- |
+| `author:@me` | `author` | you wrote it |
+| `review-requested:@me` | `reviewer` | somebody is waiting on your opinion |
+| `reviewed-by:@me` | `reviewed` | you already reviewed it, so you are probably the one merging it |
+
+The third exists because approving a pull request consumes the review request.
+Without it, a pull request you approved falls out of the queue at the moment it
+becomes your job, which is the one moment it matters. Somebody else's branch,
+approved by you, waiting on CI, is invisible right up until the point you
+notice it a week later.
+
+Not `involves:@me`, which looks like it should cover this. That qualifier
+matches author, assignee, mentions and commenter, and not reviewer, so an
+approval with an empty body is not something it can see. `reviewed-by:@me` asks
+the question directly rather than hoping a review left a trace another
+qualifier happens to index.
+
+A live sample against `didx-xyz/tofu` does not settle it either way:
+`involves:@me` returned nine pull requests including the approved one, but
+`commenter:@me` returned it too, so it was reachable through a comment rather
+than through the review. The argument for `reviewed-by` is the documented
+semantics, not that measurement.
+
+A pull request reached by more than one search is reported once, under the
+first role that claims it: a pending request first, then your authorship, then
+a review you already gave. A fresh request to look again outranks the review
+you gave last week, because that is somebody waiting on you rather than a
+branch waiting on CI.
 
 The credential is found without asking: `GITHUB_TOKEN`, then `GH_TOKEN`, then
 `gh auth token`. No token means the source switches itself off with a warning,
@@ -348,7 +378,7 @@ repos = ["mcgeerdev/portfolio"]
 ```
 
 Repeating a qualifier is how GitHub search spells OR, so repositories and
-accounts union rather than intersect, and the scope applies to both searches.
+accounts union rather than intersect, and the scope applies to every search.
 `--github-repos` and `--github-orgs` take the same values comma separated, for
 a one-off run.
 
@@ -358,11 +388,12 @@ indistinguishable from having nothing to do.
 
 ### Nothing is silently dropped
 
-Both searches page through cursors until they run out or `--github-limit` is
-reached. Hitting the limit sets a warning that travels with the data: `/health`
-carries it on the source, and `/api/work` and `/api/attention` carry it in
-`warnings`, so a consumer showing a capped list can say so. `healthy` stays
-true, because the adapter works; the answer is just not the whole answer.
+Every search pages through cursors until the results run out or
+`--github-limit` is reached. Hitting the limit sets a warning that travels with
+the data: `/health` carries it on the source, and `/api/work` and
+`/api/attention` carry it in `warnings`, so a consumer showing a capped list
+can say so. `healthy` stays true, because the adapter works; the answer is just
+not the whole answer.
 
 ## Dynacat
 
