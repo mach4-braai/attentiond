@@ -15,10 +15,15 @@ import (
 // eventRequest is the body of POST /api/events. It is the contract local
 // processes such as builds, tests, tofu runs and agent hooks report against.
 type eventRequest struct {
-	Source    string            `json:"source"`
-	ID        string            `json:"id"`
-	Event     string            `json:"event"`
-	Title     string            `json:"title"`
+	Source string `json:"source"`
+	ID     string `json:"id"`
+	Event  string `json:"event"`
+	Title  string `json:"title"`
+	// Label is the word for why this item is here, when the producer knows a
+	// better one than the lifecycle state. "waiting for approval" says
+	// something that "needs you" does not, and it is what [attention]
+	// top_labels and [notify] labels are matched against.
+	Label     string            `json:"label"`
 	Severity  string            `json:"severity"`
 	Context   map[string]string `json:"context"`
 	URL       string            `json:"url"`
@@ -112,12 +117,18 @@ func (s *server) buildItem(request eventRequest) (attention.Item, error) {
 		})
 	}
 
+	// Tone is left to the state's own default: a producer reports a lifecycle
+	// verb, and how loud that should look is not its call. Label it may set,
+	// because only the producer knows that a clean exit means "now approve
+	// this" rather than "done".
 	return attention.Item{
 		ID:        attention.Key(source, id),
 		Source:    source,
 		Title:     title,
 		State:     state,
 		Severity:  severity,
+		Label:     strings.TrimSpace(request.Label),
+		Priority:  attention.DefaultPriority(state),
 		Context:   meta,
 		UpdatedAt: request.Timestamp,
 		Actions:   actions,

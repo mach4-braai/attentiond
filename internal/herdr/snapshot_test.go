@@ -26,20 +26,28 @@ func TestMapStatus(t *testing.T) {
 		herdr    string
 		state    attention.State
 		severity attention.Severity
+		label    string
+		tone     attention.Tone
 	}{
-		{"working", attention.StateWorking, attention.SeverityInfo},
-		{"idle", attention.StateWaiting, attention.SeverityInfo},
-		{"blocked", attention.StateNeedsAttention, attention.SeverityWarning},
-		{"done", attention.StateDone, attention.SeverityInfo},
-		{"unknown", attention.StateWaiting, attention.SeverityInfo},
-		{"something-herdr-added-later", attention.StateWaiting, attention.SeverityInfo},
+		{"working", attention.StateWorking, attention.SeverityInfo, "working", attention.ToneActive},
+		{"idle", attention.StateWaiting, attention.SeverityInfo, "idle", attention.ToneNeutral},
+		{"blocked", attention.StateNeedsAttention, attention.SeverityWarning, "blocked", attention.ToneAttention},
+		{"done", attention.StateDone, attention.SeverityInfo, "done", attention.ToneDone},
+		{"unknown", attention.StateWaiting, attention.SeverityInfo, "unknown", attention.ToneNeutral},
+		{"something-herdr-added-later", attention.StateWaiting, attention.SeverityInfo, "unknown", attention.ToneNeutral},
 	}
 
 	for _, tc := range cases {
-		state, severity := mapStatus(tc.herdr)
+		state, severity, label, tone := mapStatus(tc.herdr)
 		if state != tc.state || severity != tc.severity {
 			t.Errorf("mapStatus(%q) = %q/%q, want %q/%q",
 				tc.herdr, state, severity, tc.state, tc.severity)
+		}
+		// The label is Herdr's own word so that the same pane reads the same
+		// in Herdr's sidebar and on the dashboard.
+		if label != tc.label || tone != tc.tone {
+			t.Errorf("mapStatus(%q) displayed %q/%q, want %q/%q",
+				tc.herdr, label, tone, tc.label, tc.tone)
 		}
 	}
 }

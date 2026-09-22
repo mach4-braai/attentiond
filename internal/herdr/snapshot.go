@@ -97,20 +97,25 @@ func DecodeFixture(raw []byte) (SessionSnapshot, error) {
 
 // mapStatus translates Herdr's semantic agent status. Herdr never reports a
 // failure, so attention.StateFailed only arrives through /api/events.
-func mapStatus(status string) (attention.State, attention.Severity) {
+//
+// The label is Herdr's own word rather than a translation of it. The same pane
+// appears in Herdr's agent sidebar, and a pane that reads "blocked" there and
+// "needs you" on the dashboard costs a human the moment it takes to notice
+// they are the same thing.
+func mapStatus(status string) (attention.State, attention.Severity, string, attention.Tone) {
 	switch status {
 	case "working":
-		return attention.StateWorking, attention.SeverityInfo
+		return attention.StateWorking, attention.SeverityInfo, "working", attention.ToneActive
 	case "blocked":
-		return attention.StateNeedsAttention, attention.SeverityWarning
+		return attention.StateNeedsAttention, attention.SeverityWarning, "blocked", attention.ToneAttention
 	case "done":
-		return attention.StateDone, attention.SeverityInfo
+		return attention.StateDone, attention.SeverityInfo, "done", attention.ToneDone
 	case "idle":
-		return attention.StateWaiting, attention.SeverityInfo
+		return attention.StateWaiting, attention.SeverityInfo, "idle", attention.ToneNeutral
 	default:
 		// "unknown" means an agent is present but Herdr cannot classify it, not
 		// that anything went wrong.
-		return attention.StateWaiting, attention.SeverityInfo
+		return attention.StateWaiting, attention.SeverityInfo, "unknown", attention.ToneNeutral
 	}
 }
 
@@ -128,7 +133,7 @@ func Normalize(snapshot SessionSnapshot, baseURL string, now time.Time) []attent
 
 	items := make([]attention.Item, 0, len(snapshot.Agents))
 	for _, agent := range snapshot.Agents {
-		state, severity := mapStatus(agent.AgentStatus)
+		state, severity, label, tone := mapStatus(agent.AgentStatus)
 		workspace := workspaces[agent.WorkspaceID]
 		workspaceLabel := firstNonEmpty(workspace.Label, agent.WorkspaceID)
 		meta := map[string]string{
@@ -151,6 +156,9 @@ func Normalize(snapshot SessionSnapshot, baseURL string, now time.Time) []attent
 			Title:     workspaceLabel + " · " + agentLabel(agent),
 			State:     state,
 			Severity:  severity,
+			Label:     label,
+			Tone:      tone,
+			Priority:  attention.DefaultPriority(state),
 			Context:   meta,
 			UpdatedAt: now,
 			Actions: []attention.Action{{

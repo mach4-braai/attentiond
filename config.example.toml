@@ -6,7 +6,7 @@
 #
 #   Herdr / OMP ──┐
 #   shell / tofu ─┤
-#   GitHub ───────┼──▶ attentiond ──▶ Glance
+#   GitHub ───────┼──▶ attentiond ──▶ Dynacat
 #   future tools ─┘
 #
 # Every key below shows its default, so a real config only needs the lines it
@@ -30,6 +30,16 @@ addr = "127.0.0.1:7717"
 
 log_level = "info"   # debug, info, warn, error
 log_format = "text"  # text or json
+
+[attention]
+# Labels that go above every rank a source sets for itself, including a meeting
+# about to start. This is the one ordering decision that belongs in a file:
+# whether something outranks the whole table is a judgement about your week,
+# not a property of the work.
+#
+# Matching ignores case and surrounding space. An unmatched label is not an
+# error, because a label can come from a producer this file has never seen.
+top_labels = ["waiting for approval"]
 
 [events]
 # How long items that reached completed or failed through POST /api/events stay
@@ -69,6 +79,15 @@ poll = "1m"
 # to do.
 repos = ["owner/name"]
 orgs = ["your-org"]
+
+# Repositories whose review requests go to the top of the queue. A review you
+# owe in the repository that runs the infrastructure is not the same errand as
+# one in a side project, and severity cannot say so: both are warnings.
+#
+# Nothing else is reordered, and this is not a filter. A repository left out is
+# still watched, its review requests just rank below these. Matching ignores
+# case; a malformed entry fails startup like repos does.
+priority_repos = ["owner/name"]
 
 # A draft untouched for longer than this is reported as a stale draft rather
 # than a plain draft. Drafts never enter the attention queue either way.

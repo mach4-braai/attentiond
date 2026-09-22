@@ -1,0 +1,124 @@
+# Dynacat configuration for attentiond.
+#
+# Run it standalone:
+#
+#   dynacat --config dynacat/attentiond.yml
+#
+# Or copy the widgets under `widgets:` into a column of your own dynacat.yml.
+#
+# Dynacat fetches the JSON server-side, so `url` is the address attentiond
+# listens on. The action buttons are submitted by the browser, so they use the
+# absolute URLs attentiond puts in each item, built from its --public-url.
+
+server:
+  # The UI editor writes YAML back into the config file. This file is version-
+  # controlled; editor writes would bypass git and overwrite comments and intent.
+  allow-editing: false
+
+pages:
+  - name: Work
+    columns:
+      - size: full
+        widgets:
+          - type: custom-api
+            title: Needs attention
+            cache: 5s
+            update-interval: 5s
+            url: http://127.0.0.1:7717/api/attention
+            template: |
+              {{/* Inline tone classes: this file has no assets directory to
+                   reference, so the classes are defined once via a style block.
+                   Colour alone fails for anyone who cannot separate red from
+                   green; each state also carries a glyph for that reason.
+                   These six values are the complete attentiond tone vocabulary. */}}
+              <style>
+                :root { --color-ready: #e8a020; }
+                .tone-ready    { color: var(--color-ready); font-weight: 600; }
+                .tone-ready-item { border-left: 3px solid var(--color-ready); padding-left: 0.5rem; }
+                .tone-attention { color: var(--color-negative); }
+                .tone-failed   { color: var(--color-negative); }
+                .tone-active   { color: var(--color-highlight); }
+                .tone-done     { color: var(--color-positive); }
+                .tone-neutral  { color: var(--color-paragraph); }
+              </style>
+              {{ range .JSON.Array "warnings" }}
+                <p class="color-negative margin-bottom-10">{{ .String "" }}</p>
+              {{ end }}
+              {{ $items := .JSON.Array "items" }}
+              {{ if eq (len $items) 0 }}
+                <p class="color-positive">Nothing is waiting on you.</p>
+              {{ else }}
+              <ul class="list list-gap-14">
+                {{ range $items }}
+                {{ $tone := .String "tone" }}
+                {{ $toneClass := "tone-neutral" }}
+                {{ $glyph := "" }}
+                {{ if eq $tone "ready" }}{{ $toneClass = "tone-ready" }}{{ $glyph = ">" }}
+                {{ else if eq $tone "attention" }}{{ $toneClass = "tone-attention" }}{{ $glyph = "!" }}
+                {{ else if eq $tone "failed" }}{{ $toneClass = "tone-failed" }}{{ $glyph = "x" }}
+                {{ else if eq $tone "active" }}{{ $toneClass = "tone-active" }}{{ $glyph = "~" }}
+                {{ else if eq $tone "done" }}{{ $toneClass = "tone-done" }}{{ $glyph = "." }}
+                {{ end }}
+                <li {{ if eq $tone "ready" }}class="tone-ready-item"{{ end }}>
+                  <div class="flex items-center gap-10">
+                    <span class="size-h6 shrink-0 {{ $toneClass }}">{{ if $glyph }}{{ $glyph }} {{ end }}{{ .String "label" }}</span>
+                    <span class="grow text-truncate color-highlight">{{ .String "title" }}</span>
+                    <span class="size-h6 shrink-0 color-paragraph" {{ .String "updated_at" | parseTime "rfc3339" | toRelativeTime }}></span>
+                  </div>
+                  <ul class="list-horizontal-text margin-top-3">
+                    <li class="color-paragraph">{{ .String "source" }}</li>
+                    {{ range .Array "actions" }}
+                    <li>
+                      {{ if eq (.String "method") "GET" }}
+                        <a class="color-highlight" href="{{ .String "href" }}" target="_blank">{{ .String "label" }}</a>
+                      {{ else }}
+                        <button type="button" class="color-highlight" style="background:none;border:0;padding:0;font:inherit;cursor:pointer"
+                          onclick="fetch('{{ .String "href" }}',{method:'POST',mode:'no-cors'});this.disabled=true">{{ .String "label" }}</button>
+                      {{ end }}
+                    </li>
+                    {{ end }}
+                  </ul>
+                </li>
+                {{ end }}
+              </ul>
+              {{ end }}
+              {{/* A fetch, not a form. Dynacat serves `form-action 'self'`,
+                   so a form posting to attentiond on another port is dropped
+                   by the browser before it is sent, silently. The same policy
+                   allows connect-src over http, which is what this is.
+
+                   no-cors because attentiond sets no CORS headers and should
+                   not: it has no authentication, and a readable response
+                   would hand this queue to any page open in the browser. The
+                   request still arrives, and the widget's own refresh is
+                   where the result shows up. */}}
+
+          - type: custom-api
+            title: All work
+            cache: 5s
+            update-interval: 30s
+            url: http://127.0.0.1:7717/api/work
+            template: |
+              {{ $items := .JSON.Array "items" }}
+              {{ if eq (len $items) 0 }}
+                <p class="color-paragraph">Nothing in flight.</p>
+              {{ else }}
+              <ul class="list list-gap-10 collapsible-container" data-collapse-after="8">
+                {{ range $items }}
+                {{ $tone := .String "tone" }}
+                {{ $toneClass := "tone-neutral" }}
+                {{ $glyph := "" }}
+                {{ if eq $tone "ready" }}{{ $toneClass = "tone-ready" }}{{ $glyph = ">" }}
+                {{ else if eq $tone "attention" }}{{ $toneClass = "tone-attention" }}{{ $glyph = "!" }}
+                {{ else if eq $tone "failed" }}{{ $toneClass = "tone-failed" }}{{ $glyph = "x" }}
+                {{ else if eq $tone "active" }}{{ $toneClass = "tone-active" }}{{ $glyph = "~" }}
+                {{ else if eq $tone "done" }}{{ $toneClass = "tone-done" }}{{ $glyph = "." }}
+                {{ end }}
+                <li class="flex items-center gap-10">
+                  <span class="size-h6 shrink-0 {{ $toneClass }}">{{ if $glyph }}{{ $glyph }} {{ end }}{{ .String "label" }}</span>
+                  <span class="grow text-truncate color-highlight">{{ .String "title" }}</span>
+                  <span class="size-h6 shrink-0 color-paragraph" {{ .String "updated_at" | parseTime "rfc3339" | toRelativeTime }}></span>
+                </li>
+                {{ end }}
+              </ul>
+              {{ end }}
