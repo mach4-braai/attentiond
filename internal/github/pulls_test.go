@@ -177,6 +177,89 @@ func TestClassifyLeavesDraftsPlainWhenStalenessIsDisabled(t *testing.T) {
 	}
 }
 
+func TestQueueOrderPutsTheCheapestWorkFirst(t *testing.T) {
+	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+
+	mergeable := pull(1, func(pr *PullRequest) {
+		pr.ReviewDecision = "APPROVED"
+		pr.MergeStateStatus = "CLEAN"
+	})
+	inTofu := pull(2, nil)
+	elsewhere := pull(3, func(pr *PullRequest) {
+		pr.Repository = Repository{NameWithOwner: "mcgeerdev/portfolio"}
+	})
+	broken := pull(4, withChecks("FAILURE"))
+
+	items := Normalize(Inbox{
+		ReviewRequested: []PullRequest{inTofu, elsewhere},
+		Authored:        []PullRequest{mergeable, broken},
+	}, cfg, now)
+
+	priorities := map[string]int{}
+	tones := map[string]attention.Tone{}
+	for _, item := range items {
+		priorities[item.Label] = item.Priority
+		tones[item.Label] = item.Tone
+	}
+
+	// One click from finished beats a review somebody is waiting on, which
+	// beats the same review in a repository nobody named, which beats work
+	// that is merely broken.
+	if !(priorities[labelReadyToMerge] > priorities[labelReviewRequested]) {
+		t.Errorf("ready to merge (%d) did not outrank a review request (%d)",
+			priorities[labelReadyToMerge], priorities[labelReviewRequested])
+	}
+	if !(priorities[labelReviewRequested] > priorities[labelChecksFailing]) {
+		t.Errorf("a review request (%d) did not outrank failing checks (%d)",
+			priorities[labelReviewRequested], priorities[labelChecksFailing])
+	}
+	if tones[labelReadyToMerge] != attention.ToneReady {
+		t.Errorf("ready to merge has tone %q, want the one tone nothing else uses",
+			tones[labelReadyToMerge])
+	}
+
+	// Both review requests carry the same label, so compare the items.
+	var tofuRank, elsewhereRank int
+	for _, item := range items {
+		switch item.Context["repo"] {
+		case "didx-xyz/tofu":
+			if item.Label == labelReviewRequested {
+				tofuRank = item.Priority
+			}
+		case "mcgeerdev/portfolio":
+			elsewhereRank = item.Priority
+		}
+	}
+	if !(tofuRank > elsewhereRank) {
+		t.Errorf("a review in a priority repo (%d) did not outrank one elsewhere (%d)",
+			tofuRank, elsewhereRank)
+	}
+}
+
+func TestPriorityRepoMatchingIgnoresCase(t *testing.T) {
+	// GitHub answers with whatever case the repository was created in, so a
+	// config file is allowed to disagree about it.
+	set, err := NewPriorityRepos([]string{"DIDx-XYZ/Tofu"})
+	if err != nil {
+		t.Fatalf("NewPriorityRepos: %v", err)
+	}
+
+	items := Normalize(
+		Inbox{ReviewRequested: []PullRequest{pull(1, nil)}},
+		Config{PriorityRepos: set},
+		time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC),
+	)
+	if items[0].Priority != attention.PriorityBlockingOthers {
+		t.Errorf("priority = %d, want %d: didx-xyz/tofu did not match DIDx-XYZ/Tofu",
+			items[0].Priority, attention.PriorityBlockingOthers)
+	}
+
+	if _, err := NewPriorityRepos([]string{"tofu"}); err == nil {
+		t.Error("a bare repository name was accepted; a typo has to fail startup, not quietly rank nothing")
+	}
+}
+
 func TestNormalizeCarriesIdentityAndAnOpenLink(t *testing.T) {
 	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 9, 12, 15, 5, 16, 0, time.UTC)

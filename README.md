@@ -1,6 +1,6 @@
 # attentiond
 
-Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON for UIs such as Glance.
+Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON for UIs such as Dynacat.
 
 It is not a frontend. It holds state and answers questions about it.
 
@@ -11,16 +11,15 @@ flowchart LR
     github["GitHub"] -- "GraphQL" --> attentiond
     future["future tools"] -. "POST /api/events" .-> attentiond
 
-    attentiond["attentiond"] -- "HTTP/JSON" --> glance["Glance"]
-    glance -- "POST /api/actions/…" --> attentiond
+    attentiond["attentiond"] -- "HTTP/JSON" --> dynacat["Dynacat"]
+    dynacat -- "POST /api/actions/…" --> attentiond
 
     attentiond -- "focus pane, tab, workspace" --> herdr
 ```
 
-Sources push or are polled; Glance only reads and asks attentiond to act. The
-arrow back to Herdr is the whole point of the action route: a dashboard that
-tells you something needs you is half a tool unless it can also put you back
-in front of it.
+Sources push or are polled; the dashboard only reads and asks attentiond to
+act. The arrow back into Herdr putting you in front of the work is the point
+of the daemon holding state at all.
 
 ## Run it
 
@@ -53,6 +52,9 @@ addr = "127.0.0.1:7717"        # must be loopback
 log_level = "info"             # debug, info, warn, error
 log_format = "text"            # text or json
 
+[attention]
+top_labels = []                # labels that outrank every source's own ranking
+
 [events]
 ttl = "1h"                     # how long finished /api/events items stay visible
 
@@ -68,6 +70,7 @@ poll = "1m"
 repos = []                     # owner/name; empty means every repository the token sees
 orgs = []                      # account logins
 stale_draft_after = "336h"
+priority_repos = []            # owner/name; their review requests rank first
 limit = 100                    # per search, before the result is reported incomplete
 # api = "https://api.github.com/graphql"   # for GitHub Enterprise
 ```
@@ -111,6 +114,9 @@ Herdr reports `done` only while a completed agent is unseen and drops it to
       "title": "tofu · Codex: plan",
       "state": "needs_attention",
       "severity": "warning",
+      "label": "blocked",
+      "tone": "attention",
+      "priority": 10,
       "context": {
         "workspace_id": "w2",
         "workspace_label": "tofu",
@@ -134,8 +140,64 @@ Herdr reports `done` only while a completed agent is unseen and drops it to
 }
 ```
 
-Items sort by severity, then by recency. `attention` is derived from `state`, so
-a consumer never has to restate the rules.
+Items sort by priority, then severity, then recency. A consumer renders them in
+the order it received them.
+
+Three fields exist so that nothing downstream has to restate what the daemon
+already knows:
+
+| Field | What it answers |
+| --- | --- |
+| `label` | the word a human uses for why this is here |
+| `tone` | how that word should read where there is colour |
+| `priority` | what to clear first |
+
+`state` is the lifecycle position and stays coarse: five values, which is what
+the store and the API filters reason about. `label` is the specific reason, and
+two labels often share a state. A pull request that is `review requested` and
+one that is `ready to merge` are both `needs_attention`, and the difference is
+the whole point of looking at the dashboard. Sources that have no better word
+leave both unset and get the state's own.
+
+`tone` is a closed set, so a consumer maps six values onto a palette instead of
+carrying a table of every label in the system:
+
+| Tone | Meaning |
+| --- | --- |
+| `ready` | one action from finished |
+| `attention` | wants a human now |
+| `failed` | broken |
+| `active` | making progress by itself |
+| `done` | finished and unread |
+| `neutral` | somebody else's turn |
+
+`priority` is a separate question from `severity`. Severity is how bad
+something is, and nearly everything actionable is a warning, so sorting on it
+alone leaves the queue in recency order. The ranks:
+
+| Rank | What sits there |
+| --- | --- |
+| 100 | a label named in `[attention] top_labels`; no source sets this |
+| 50 | a meeting starting soon, the only work here with a deadline |
+| 40 | a pull request that is ready to merge |
+| 30 | a review requested in a `priority_repos` repository |
+| 20 | a review requested anywhere else |
+| 10 | everything else that wants you: a blocked agent, failing checks, a rebase |
+| 5 | done and unread |
+| 0 | running, or somebody else's turn |
+
+Every rank but the top is a property of the work, which is why a source can
+decide it. `[attention] top_labels` is the judgement: it promotes a label to
+100 because you said so about a class of work. A saved OpenTofu plan nobody
+has approved is the case it exists for, since the lock is released but the
+change is not in, and an unapproved plan is easier to forget than a pull
+request sitting on a board.
+
+It is resolved before the queue is sorted, so the `priority` a consumer reads
+is the one it was ordered by. Matching folds case and surrounding space.
+
+`attention` is derived from `state`, so a consumer never has to restate the
+rules.
 
 ### `POST /api/events`
 
@@ -147,6 +209,7 @@ curl -sS localhost:7717/api/events -d '{
   "source": "tofu",
   "id": "plan-prod",
   "event": "needs_attention",
+  "label": "waiting for approval",
   "title": "tofu plan wants approval",
   "context": {"dir": "~/didx.projects/tofu"}
 }'
@@ -158,6 +221,7 @@ curl -sS localhost:7717/api/events -d '{
 | `id` | yes | stable within the source |
 | `event` | yes | `started`, `working`, `waiting`, `needs_attention`, `completed`, `failed` |
 | `title` | no | defaults to `"<source> <id>"` |
+| `label` | no | the word for why this is here; defaults to the state's own |
 | `severity` | no | `info`, `warning`, `critical`; defaults from the event |
 | `context` | no | string map, passed through untouched |
 | `url` | no | becomes an Open action |
@@ -202,13 +266,18 @@ seconds and turns each detected agent into an item. Panes running an ordinary
 shell are not reported. No terminal output is read: `agent_status` is a semantic
 field Herdr already computes.
 
-| Herdr `agent_status` | state | severity |
-| --- | --- | --- |
-| `working` | `working` | info |
-| `idle` | `waiting` | info |
-| `blocked` | `needs_attention` | warning |
-| `done` | `done` | info |
-| `unknown` | `waiting` | info |
+| Herdr `agent_status` | state | label | tone |
+| --- | --- | --- | --- |
+| `working` | `working` | `working` | active |
+| `idle` | `waiting` | `idle` | neutral |
+| `blocked` | `needs_attention` | `blocked` | attention |
+| `done` | `done` | `done` | done |
+| `unknown` | `waiting` | `unknown` | neutral |
+
+The label is Herdr's own word rather than a translation of it. The same pane
+appears in Herdr's agent sidebar, and one that reads `blocked` there and
+something else here costs a human the moment it takes to notice they are the
+same pane.
 
 Herdr never reports a failure, so `failed` only arrives through `/api/events`.
 
@@ -229,25 +298,34 @@ because a machine that never logged into `gh` should still get a daemon. The
 token is never logged and never leaves the process; `/health` names its origin,
 not its value.
 
-Each item carries the word a human uses for why it is there in
-`context.pr_state`, separate from the five lifecycle states:
+Each item carries the word a human uses for why it is there in `label`, and
+repeats it in `context.pr_state` for anything still reading that. It is
+separate from the five lifecycle states, because several labels share one:
 
-| `pr_state` | state | severity | when |
-| --- | --- | --- | --- |
-| `review requested` | `needs_attention` | warning | someone asked you, whatever the branch looks like |
-| `rebase required` | `needs_attention` | warning | `mergeStateStatus` is `DIRTY` or `BEHIND` |
-| `checks failing` | `failed` | warning | head commit rollup is `FAILURE` or `ERROR` |
-| `changes requested` | `needs_attention` | warning | a reviewer sent it back |
-| `checks running` | `working` | info | rollup is `PENDING` or `EXPECTED` |
-| `ready to merge` | `needs_attention` | warning | approved and `CLEAN` |
-| `approved` | `waiting` | info | approved but not mergeable yet |
-| `awaiting review` | `waiting` | info | nobody has looked yet |
-| `draft`, `stale draft` | `waiting` | info | drafts never enter the queue, however red |
+| `label` | state | tone | rank | when |
+| --- | --- | --- | --- | --- |
+| `review requested` | `needs_attention` | attention | 30 or 20 | someone asked you, whatever the branch looks like |
+| `rebase required` | `needs_attention` | attention | 10 | `mergeStateStatus` is `DIRTY` or `BEHIND` |
+| `checks failing` | `failed` | failed | 10 | head commit rollup is `FAILURE` or `ERROR` |
+| `changes requested` | `needs_attention` | attention | 10 | a reviewer sent it back |
+| `checks running` | `working` | active | 0 | rollup is `PENDING` or `EXPECTED` |
+| `ready to merge` | `needs_attention` | ready | 40 | approved and `CLEAN` |
+| `approved` | `waiting` | neutral | 0 | approved but not mergeable yet |
+| `awaiting review` | `waiting` | neutral | 0 | nobody has looked yet |
+| `draft`, `stale draft` | `waiting` | neutral | 0 | drafts never enter the queue, however red |
 
 Order matters: the first condition that holds is the one reported, so the most
 actionable reason wins. A draft is a statement that it is not ready, so it is
 checked before anything else and stays out of the attention queue. `stale draft`
 needs `--github-stale-draft` to have elapsed since the last update.
+
+`ready to merge` is the only label with the `ready` tone and the only one
+ranked above a review request. It is finished work held up by one click, which
+makes it the cheapest thing on the board to clear.
+
+A review request ranks 30 when the repository is in `[github] priority_repos`
+and 20 otherwise. Nothing else is reordered by that setting, and it is not a
+filter: a repository left out is still watched.
 
 `mergeStateStatus` is the only field that separates "behind base" from
 "conflicting", and it still needs the `merge-info-preview` Accept header, which
@@ -286,22 +364,32 @@ carries it on the source, and `/api/work` and `/api/attention` carry it in
 `warnings`, so a consumer showing a capped list can say so. `healthy` stays
 true, because the adapter works; the answer is just not the whole answer.
 
-## Glance
+## Dynacat
 
-`glance/attentiond.yml` is a runnable Glance config with two `custom-api`
-widgets: the attention queue with action buttons, and a full work list.
+`dynacat/attentiond.yml` is a runnable [Dynacat](https://github.com/Panonim/dynacat)
+config with two `custom-api` widgets: the attention queue with action buttons,
+and the full work list.
 
 ```bash
-glance --config glance/attentiond.yml
+dynacat --config dynacat/attentiond.yml
 ```
 
-Action buttons POST into a hidden frame, so clicking Open focuses the Herdr pane
-without navigating the dashboard away.
+Dynacat rather than Glance, which it forks, because its widgets refresh
+themselves: a queue that only changes when you reload is a queue you have to
+remember to reload. The widgets read `label` and `tone` and render items in the
+order the daemon sent them.
+
+Action buttons send a `fetch`, not a form submission: Dynacat serves
+`form-action 'self'`, so a form posting to attentiond on another port is
+dropped by the browser before it leaves. Clicking Open focuses the Herdr pane
+without navigating the dashboard away. The widgets render whatever actions an
+item carries, so new controls arrive without the templates knowing what they
+are.
 
 ## State is in memory
 
-Herdr-sourced items are rebuilt from a snapshot within one poll of a restart.
-Event items are lost, which is the one real cost, and is acceptable while the
-producers are builds and tests someone is watching. See
-[docs/decision-brief.md](docs/decision-brief.md) for the reasoning and for the
-rest of the MVP design.
+Herdr items are rebuilt from a snapshot within one poll of a restart and
+GitHub items within a minute. Event items are lost, which is the one real cost,
+and is acceptable while the producers are builds and tests someone is watching.
+See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning and for
+the rest of the MVP design.

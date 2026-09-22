@@ -278,7 +278,7 @@ func Normalize(occurrences []Occurrence, cfg Config, now time.Time) []attention.
 	items := make([]attention.Item, 0, len(occurrences))
 
 	for _, occurrence := range occurrences {
-		state, severity, phase := classify(occurrence, cfg, now)
+		state, severity, phase, tone, priority := classify(occurrence, cfg, now)
 
 		meta := map[string]string{
 			"calendar":  occurrence.Feed,
@@ -310,6 +310,9 @@ func Normalize(occurrences []Occurrence, cfg Config, now time.Time) []attention.
 			Title:     occurrence.Summary,
 			State:     state,
 			Severity:  severity,
+			Label:     phase,
+			Tone:      tone,
+			Priority:  priority,
 			Context:   meta,
 			UpdatedAt: now,
 			Actions:   actions,
@@ -326,16 +329,23 @@ const (
 	phaseLater        = "later"
 )
 
-func classify(occurrence Occurrence, cfg Config, now time.Time) (attention.State, attention.Severity, string) {
+// classify places a meeting in its phase, and ranks it. A meeting starting
+// soon outranks everything else on the queue because it is the only item in
+// this stack with a deadline: a pull request is still mergeable in an hour,
+// and a call is not still joinable once it has finished.
+func classify(occurrence Occurrence, cfg Config, now time.Time) (attention.State, attention.Severity, string, attention.Tone, int) {
 	switch {
 	case !occurrence.Start.After(now):
 		// Already running. You are either in it or you are not, and a daemon
 		// cannot tell, so it stays out of the queue.
-		return attention.StateWorking, attention.SeverityInfo, phaseInProgress
+		return attention.StateWorking, attention.SeverityInfo, phaseInProgress,
+			attention.ToneActive, attention.PriorityBackground
 	case occurrence.Start.Sub(now) <= cfg.Lead:
-		return attention.StateNeedsAttention, attention.SeverityWarning, phaseStartingSoon
+		return attention.StateNeedsAttention, attention.SeverityWarning, phaseStartingSoon,
+			attention.ToneAttention, attention.PriorityDeadline
 	default:
-		return attention.StateWaiting, attention.SeverityInfo, phaseLater
+		return attention.StateWaiting, attention.SeverityInfo, phaseLater,
+			attention.ToneNeutral, attention.PriorityBackground
 	}
 }
 

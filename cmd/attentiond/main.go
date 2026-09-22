@@ -60,7 +60,10 @@ func run() error {
 	}
 
 	started := time.Now()
-	store := attention.NewStore(logger, cfg.Events.TTL.Std())
+	store := attention.NewStore(logger, attention.StoreConfig{
+		EventTTL:  cfg.Events.TTL.Std(),
+		TopLabels: labelSet(cfg.Attention.TopLabels),
+	})
 
 	sources := map[string]func() attention.SourceStatus{}
 	actions := map[string]httpapi.Executor{}
@@ -131,7 +134,8 @@ func run() error {
 		"addr", listener.Addr().String(),
 		"public_url", cfg.Daemon.PublicURL,
 		"sources", strings.Join(sourceNames(sources), ","),
-		"event_ttl", cfg.Events.TTL.String())
+		"event_ttl", cfg.Events.TTL.String(),
+		"top_labels", strings.Join(cfg.Attention.TopLabels, ","))
 
 	errs := make(chan error, 1)
 	go func() {
@@ -156,6 +160,22 @@ func run() error {
 	return nil
 }
 
+// labelSet folds a configured label list into the form the store matches
+// against. Nil for an empty list, so the lookup can be skipped entirely rather
+// than hashing a string per item per poll.
+func labelSet(labels []string) map[string]bool {
+	if len(labels) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(labels))
+	for _, label := range labels {
+		if trimmed := strings.TrimSpace(label); trimmed != "" {
+			set[strings.ToLower(trimmed)] = true
+		}
+	}
+	return set
+}
+
 // newGitHubPoller returns nil when GitHub polling is off or no credential is
 // available. A missing token is not an error: the daemon is useful without it,
 // and a hard failure here would make `attentiond` unstartable on a machine that
@@ -169,6 +189,10 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 	if err != nil {
 		return nil, err
 	}
+	priority, err := github.NewPriorityRepos(cfg.PriorityRepos)
+	if err != nil {
+		return nil, err
+	}
 
 	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -178,7 +202,8 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 		return nil, nil
 	}
 	log.Info("github adapter enabled",
-		"credential", origin, "poll", cfg.Poll.String(), "scope", scope.String())
+		"credential", origin, "poll", cfg.Poll.String(), "scope", scope.String(),
+		"priority_repos", strings.Join(cfg.PriorityRepos, ","))
 
 	return github.NewPoller(
 		github.NewClient(cfg.API, token, 15*time.Second),
@@ -186,7 +211,10 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 		github.PollerConfig{
 			Interval: cfg.Poll.Std(),
 			Search:   github.Search{Scope: scope, Limit: cfg.Limit},
-			Normal:   github.Config{StaleDraftAfter: cfg.StaleDraftAfter.Std()},
+			Normal: github.Config{
+				StaleDraftAfter: cfg.StaleDraftAfter.Std(),
+				PriorityRepos:   priority,
+			},
 		},
 		log,
 	), nil
