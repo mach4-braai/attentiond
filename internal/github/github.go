@@ -254,6 +254,11 @@ type Inbox struct {
 	Login           string
 	Authored        []PullRequest
 	ReviewRequested []PullRequest
+	// Reviewed is the pull requests you have already reviewed. Approving one
+	// consumes the review request, so without this search a pull request you
+	// approved and now own the merge on disappears from the queue at the
+	// moment it becomes your job.
+	Reviewed []PullRequest
 	// Truncated is set when GitHub had more results than Limit allowed. The
 	// caller must surface it: a silently capped attention queue is worse than
 	// no attention queue, because it looks complete.
@@ -298,8 +303,13 @@ type graphQLResponse struct {
 	} `json:"errors"`
 }
 
-// Inbox fetches the open pull requests you authored and the ones waiting on
-// your review. Archived repositories are excluded: nothing there is actionable.
+// Inbox fetches the open pull requests you authored, the ones waiting on your
+// review, and the ones you have already reviewed. Archived repositories are
+// excluded: nothing there is actionable.
+//
+// Three searches rather than one `involves:@me`, because that qualifier covers
+// author, assignee, mentions and commenter, and not reviewer. An approval with
+// no comment body would not match it, which is exactly the case that matters.
 func (c *Client) Inbox(ctx context.Context, search Search) (Inbox, error) {
 	suffix := search.Scope.qualifiers()
 
@@ -313,16 +323,31 @@ func (c *Client) Inbox(ctx context.Context, search Search) (Inbox, error) {
 	if err != nil {
 		return Inbox{}, err
 	}
+	reviewed, reviewedLogin, moreReviewed, err := c.searchAll(ctx,
+		"is:open is:pr reviewed-by:@me archived:false"+suffix, search.Limit)
+	if err != nil {
+		return Inbox{}, err
+	}
 	if login == "" {
-		login = reviewLogin
+		login = firstNonEmpty(reviewLogin, reviewedLogin)
 	}
 
 	return Inbox{
 		Login:           login,
 		Authored:        authored,
 		ReviewRequested: review,
-		Truncated:       moreAuthored || moreReview,
+		Reviewed:        reviewed,
+		Truncated:       moreAuthored || moreReview || moreReviewed,
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // searchAll pages until the results run out or limit is reached, and reports

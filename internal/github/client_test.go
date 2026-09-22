@@ -64,7 +64,8 @@ func TestInboxDecodesNullsGitHubActuallySends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inbox: %v", err)
 	}
-	if inbox.Login != "mcgeerdev" || len(inbox.Authored) != 1 || len(inbox.ReviewRequested) != 0 {
+	if inbox.Login != "mcgeerdev" || len(inbox.Authored) != 1 ||
+		len(inbox.ReviewRequested) != 0 || len(inbox.Reviewed) != 0 {
 		t.Fatalf("inbox = %+v", inbox)
 	}
 	if got := inbox.Authored[0].Checks(); got != "" {
@@ -74,14 +75,13 @@ func TestInboxDecodesNullsGitHubActuallySends(t *testing.T) {
 		t.Errorf("author = %+v, want nil", inbox.Authored[0].Author)
 	}
 
-	if len(*requests) != 2 {
+	if len(*requests) != 3 {
 		t.Fatalf("issued %d searches, want one per bucket", len(*requests))
 	}
-	if !strings.Contains((*requests)[0].Variables["q"].(string), "author:@me") {
-		t.Errorf("first query = %v", (*requests)[0].Variables["q"])
-	}
-	if !strings.Contains((*requests)[1].Variables["q"].(string), "review-requested:@me") {
-		t.Errorf("second query = %v", (*requests)[1].Variables["q"])
+	for i, want := range []string{"author:@me", "review-requested:@me", "reviewed-by:@me"} {
+		if got := (*requests)[i].Variables["q"].(string); !strings.Contains(got, want) {
+			t.Errorf("query %d = %q, want it to contain %q", i, got, want)
+		}
 	}
 }
 
