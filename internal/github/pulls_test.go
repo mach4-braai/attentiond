@@ -260,6 +260,59 @@ func TestPriorityRepoMatchingIgnoresCase(t *testing.T) {
 	}
 }
 
+func TestAPullRequestYouApprovedStaysOnTheBoard(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+
+	// didx-xyz/tofu#1009: opened by a bot, approved by you, checks still
+	// running. Approving consumed the review request, so the only search that
+	// finds it is reviewed-by, and you are the one who has to merge it.
+	approved := pull(1009, func(pr *PullRequest) {
+		pr.Title = "Bump providers"
+		pr.Author = &Actor{Login: "app/didx-renovate"}
+		pr.ReviewDecision = "APPROVED"
+		pr.MergeStateStatus = "UNKNOWN"
+		pr.Mergeable = "UNKNOWN"
+	})
+	withChecks("PENDING")(&approved)
+
+	items := Normalize(Inbox{Reviewed: []PullRequest{approved}}, Config{}, now)
+	if len(items) != 1 {
+		t.Fatalf("a pull request you approved vanished: %+v", items)
+	}
+	if items[0].Label != labelChecksRunning {
+		t.Errorf("label = %q, want %q: nobody is waiting on your opinion any more",
+			items[0].Label, labelChecksRunning)
+	}
+	if items[0].Context["role"] != roleReviewed {
+		t.Errorf("role = %q, want %q", items[0].Context["role"], roleReviewed)
+	}
+
+	// Checks go green and the merge state resolves: now it is one click away.
+	ready := approved
+	ready.MergeStateStatus = "CLEAN"
+	ready.Mergeable = "MERGEABLE"
+	withChecks("SUCCESS")(&ready)
+
+	items = Normalize(Inbox{Reviewed: []PullRequest{ready}}, Config{}, now)
+	if items[0].Label != labelReadyToMerge || items[0].Priority != attention.PriorityOneClick {
+		t.Errorf("label = %q priority = %d, want %q at %d",
+			items[0].Label, items[0].Priority, labelReadyToMerge, attention.PriorityOneClick)
+	}
+
+	// A fresh request to review it again outranks the review you already gave:
+	// that is somebody waiting on you, not a branch waiting on CI.
+	items = Normalize(Inbox{
+		ReviewRequested: []PullRequest{ready},
+		Reviewed:        []PullRequest{ready},
+	}, Config{}, now)
+	if len(items) != 1 {
+		t.Fatalf("one pull request became %d items", len(items))
+	}
+	if items[0].Label != labelReviewRequested {
+		t.Errorf("label = %q, want %q", items[0].Label, labelReviewRequested)
+	}
+}
+
 func TestNormalizeCarriesIdentityAndAnOpenLink(t *testing.T) {
 	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 9, 12, 15, 5, 16, 0, time.UTC)

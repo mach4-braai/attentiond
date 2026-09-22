@@ -13,6 +13,11 @@ import (
 const (
 	roleReviewer = "reviewer"
 	roleAuthor   = "author"
+	// roleReviewed is a pull request you have already reviewed. It is not the
+	// same errand as roleReviewer: nobody is waiting for your opinion any
+	// more, so what matters is the state of the branch. Once you approve one,
+	// you are usually the person who merges it.
+	roleReviewed = "reviewed"
 )
 
 // The labels this adapter reports in context["pr_state"]. They are the words a
@@ -72,7 +77,10 @@ var display = map[string]struct {
 // classify maps one pull request onto the core model. Order matters: the first
 // condition that holds is the one reported, so the most actionable reason wins.
 func classify(pr PullRequest, role string, cfg Config, now time.Time) (attention.State, attention.Severity, string) {
-	// Somebody asked you. Nothing about the branch changes that.
+	// Somebody asked you. Nothing about the branch changes that. A pull
+	// request you have already reviewed falls through to the branch state
+	// below instead: the question is no longer what you think of it, it is
+	// whether it can go in.
 	if role == roleReviewer {
 		return attention.StateNeedsAttention, attention.SeverityWarning, labelReviewRequested
 	}
@@ -129,11 +137,13 @@ func rank(state attention.State, label, repo string, cfg Config) (attention.Tone
 	return tone, attention.DefaultPriority(state)
 }
 
-// Normalize turns an inbox into attention items. A pull request you authored
-// and were also asked to review is reported once, as a review request, because
-// that is the half that is waiting on you.
+// Normalize turns an inbox into attention items. A pull request reached by more
+// than one search is reported once, under the first role that claims it:
+// a pending review request is what is waiting on you, then your own authorship,
+// then a review you already gave.
 func Normalize(inbox Inbox, cfg Config, now time.Time) []attention.Item {
-	items := make([]attention.Item, 0, len(inbox.ReviewRequested)+len(inbox.Authored))
+	items := make([]attention.Item, 0,
+		len(inbox.ReviewRequested)+len(inbox.Authored)+len(inbox.Reviewed))
 	seen := make(map[string]struct{}, cap(items))
 
 	for _, group := range []struct {
@@ -142,6 +152,7 @@ func Normalize(inbox Inbox, cfg Config, now time.Time) []attention.Item {
 	}{
 		{roleReviewer, inbox.ReviewRequested},
 		{roleAuthor, inbox.Authored},
+		{roleReviewed, inbox.Reviewed},
 	} {
 		for _, pr := range group.pulls {
 			key := pullKey(pr)
