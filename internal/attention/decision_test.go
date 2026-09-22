@@ -223,8 +223,6 @@ func TestDecisionsSurviveARestart(t *testing.T) {
 	}
 }
 
-// Two clicks in flight carry a full snapshot each, so the older one landing
-// last would put back the picture before the newer decision.
 func TestAWriteTheFileHasMovedPastIsDiscarded(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "decisions.json")

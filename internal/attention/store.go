@@ -167,9 +167,7 @@ func (s *Store) Attention() []Item {
 	return s.collect(s.queued())
 }
 
-// Board is one read of /api/work: the live items and the counts that belong
-// beside them, taken together so a poll landing mid-request cannot leave a
-// consumer holding one snapshot's list and another snapshot's numbers.
+// Board returns the live items and the counts that go beside them.
 func (s *Store) Board() Board {
 	s.mu.Lock()
 	defer s.mu.Unlock()
