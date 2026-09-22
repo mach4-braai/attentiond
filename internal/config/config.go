@@ -40,6 +40,7 @@ type Config struct {
 	Daemon    Daemon    `toml:"daemon"`
 	Attention Attention `toml:"attention"`
 	Events    Events    `toml:"events"`
+	Notify    Notify    `toml:"notify"`
 	Herdr     Herdr     `toml:"herdr"`
 	GitHub    GitHub    `toml:"github"`
 	Calendar  Calendar  `toml:"calendar"`
@@ -64,6 +65,27 @@ type Attention struct {
 	// week, not a property of the work.
 	TopLabels []string `toml:"top_labels"`
 }
+
+// Notify is the interruption path: which changes are worth telling a human
+// about while they are looking at something else, and who paints the popup.
+type Notify struct {
+	Enabled bool `toml:"enabled"`
+	// Route is the delivery path: "herdr" hands the notification to a running
+	// Herdr server, "system" calls the operating system's own notification
+	// service. Herdr knows whether anybody is looking at the terminal, so it
+	// is the better route right up until you want Herdr itself silent.
+	Route string `toml:"route"`
+	// Labels are the item labels worth a notification when an item moves onto
+	// one. Labels, not states: "review requested" and "ready to merge" are
+	// both needs_attention, and moving between them is the news.
+	Labels []string `toml:"labels"`
+}
+
+// Notification routes.
+const (
+	RouteHerdr  = "herdr"
+	RouteSystem = "system"
+)
 
 // Daemon is the listener and the logs.
 type Daemon struct {
@@ -160,6 +182,15 @@ func Default() Config {
 			SnoozeFor: Duration(4 * time.Hour),
 		},
 		Events: Events{TTL: Duration(time.Hour)},
+		Notify: Notify{
+			// On, unlike GitHub and the calendar: delivery is a local socket
+			// call to Herdr, which either answers or does not, and the two
+			// default labels are both changes somebody waiting on a build
+			// wants to hear without watching a tab.
+			Enabled: true,
+			Route:   RouteHerdr,
+			Labels:  []string{"ready to merge", "checks running"},
+		},
 		Herdr: Herdr{
 			Enabled: true,
 			Poll:    Duration(2 * time.Second),
@@ -229,6 +260,16 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		sort.Strings(keys)
 		return Default(), false, fmt.Errorf("%s: unknown %s: %s",
 			path, plural("key", len(keys)), strings.Join(keys, ", "))
+	}
+
+	// A misspelled route would otherwise pick the default and deliver
+	// somewhere the file does not name, which is the same silent surprise
+	// unknown keys are rejected for.
+	switch cfg.Notify.Route {
+	case RouteHerdr, RouteSystem:
+	default:
+		return Default(), false, fmt.Errorf("%s: notify.route %q: want %q or %q",
+			path, cfg.Notify.Route, RouteHerdr, RouteSystem)
 	}
 
 	// A negative period is not a shorter one: stale_after = "-720h" marks

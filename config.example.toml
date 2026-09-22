@@ -80,6 +80,38 @@ top_labels = ["waiting for approval"]
 # visible. Adapter-owned items ignore this: they live and die with each poll.
 ttl = "1h"
 
+[notify]
+# Interruptions. The dashboard answers "what is waiting on me" for somebody who
+# is looking at it; this is for the change you want to hear about while you are
+# looking at something else.
+enabled = true
+
+# Who paints the popup.
+#
+#   herdr    Herdr's notification.show over its local socket. [herdr] must be
+#            enabled. Herdr chooses between an in-app toast and a system
+#            notification in its own [ui.toast] config, and it is the one
+#            component that knows whether anybody is at the terminal.
+#   system   macOS Notification Center directly, through terminal-notifier
+#            when it is installed and osascript otherwise.
+#
+# Pick system when Herdr must stay silent: its [ui.toast] delivery is one
+# switch for everything it shows, including what arrives over the socket, so
+# silencing Herdr's own agent toasts silences this route too.
+route = "herdr"
+
+# Labels worth an interruption when an item moves onto one. Labels, not states:
+# "review requested" and "ready to merge" are both needs_attention, and the
+# move between them is the news. The full list of pull request labels is in the
+# README.
+#
+# Only a change notifies. A first sighting does not, because every item is new
+# in the first poll after a restart, and the same item repeating the same label
+# is suppressed for 15 minutes to survive GitHub reporting a mergeable branch
+# as unknown and back again. Work starting again clears that: an agent that
+# finishes twice in ten minutes finished twice.
+labels = ["ready to merge", "checks running"]
+
 [herdr]
 # Herdr's agent states (working, idle, blocked, done) arrive over its local
 # socket. On by default: it is local, it costs one socket call, and it is the
