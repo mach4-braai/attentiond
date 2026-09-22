@@ -186,6 +186,46 @@ func TestPriorityOutranksSeverityAndRecency(t *testing.T) {
 	}
 }
 
+func TestLabelChangeIsATransition(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+
+	var seen []Transition
+	store := testStore(t, StoreConfig{
+		Observer: func(batch []Transition) { seen = append(seen, batch...) },
+	}, &now)
+
+	asked := adapterItem("pr", StateNeedsAttention, SeverityWarning, "didx-xyz/tofu#1")
+	asked.Label = "review requested"
+
+	store.ReplaceSource("github", []Item{asked})
+	if len(seen) != 1 || seen[0].Existed {
+		t.Fatalf("a first sighting was not reported as new: %+v", seen)
+	}
+
+	// Same state, same severity, same title. Only the reason changed, and that
+	// is the change worth telling somebody about.
+	mergeable := asked
+	mergeable.Label = "ready to merge"
+	now = now.Add(time.Minute)
+	store.ReplaceSource("github", []Item{mergeable})
+
+	if len(seen) != 2 {
+		t.Fatalf("a label change was not observed: %+v", seen)
+	}
+	if !seen[1].Existed || seen[1].Prev.Label != "review requested" || seen[1].Next.Label != "ready to merge" {
+		t.Fatalf("transition lost its before and after: %+v", seen[1])
+	}
+	if got := store.Items()[0].UpdatedAt; !got.Equal(now) {
+		t.Fatalf("a label change left UpdatedAt at %s, want %s", got, now)
+	}
+
+	now = now.Add(time.Minute)
+	store.ReplaceSource("github", []Item{mergeable})
+	if len(seen) != 2 {
+		t.Fatalf("an unchanged poll produced a transition: %+v", seen)
+	}
+}
+
 func TestDisplayFillsInWhatASourceLeftOut(t *testing.T) {
 	label, tone := Item{State: StateFailed}.Display()
 	if label != "failed" || tone != ToneFailed {

@@ -112,6 +112,18 @@ func TestLoadRejectsADurationItCannotParse(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsARouteThatDoesNotExist(t *testing.T) {
+	// Falling back to the default here would deliver somewhere the file does
+	// not name, which on a machine that silenced Herdr means silence.
+	_, _, err := Load(write(t, "[notify]\nroute = \"osascript\"\n"), true)
+	if err == nil {
+		t.Fatal("an unknown route was accepted")
+	}
+	if !strings.Contains(err.Error(), "osascript") {
+		t.Errorf("error = %v, want the offending route named", err)
+	}
+}
+
 func TestStalePeriodIsOffUntilAFileNamesOne(t *testing.T) {
 	if got := Default().Attention.StaleAfter.Std(); got != 0 {
 		t.Fatalf("stale_after defaults to %s: work must not leave the board unasked", got)

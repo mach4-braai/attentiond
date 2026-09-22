@@ -2,7 +2,8 @@
 
 Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON for UIs such as Dynacat.
 
-It is not a frontend. It holds state and answers questions about it.
+It is not a frontend. It holds state, answers questions about it, and decides
+when a change is worth interrupting somebody for.
 
 ```mermaid
 flowchart LR
@@ -15,11 +16,14 @@ flowchart LR
     dynacat -- "POST /api/actions/…" --> attentiond
 
     attentiond -- "focus pane, tab, workspace" --> herdr
+    attentiond -- "notification.show" --> herdr
+    attentiond -- "Notification Center" --> desktop["macOS"]
 ```
 
 Sources push or are polled; the dashboard only reads and asks attentiond to
 act. The arrow back into Herdr putting you in front of the work is the point
-of the daemon holding state at all.
+of the daemon holding state at all. The two notification arrows are one or the
+other: `[notify] route` picks which.
 
 ## Run it
 
@@ -61,6 +65,11 @@ top_labels = []                # labels that outrank every source's own ranking
 
 [events]
 ttl = "1h"                     # how long finished /api/events items stay visible
+
+[notify]
+enabled = true
+route = "herdr"                # herdr or system; see below
+labels = ["ready to merge", "checks running"]
 
 [herdr]
 enabled = true
@@ -283,7 +292,8 @@ A snooze ends on three things: its deadline, its item's label moving, or
 `clear`. The label rule is the one that matters. A snooze answers a question
 about a word, so a pull request deferred as `review requested` comes straight
 back when it becomes `ready to merge`, which is new information rather than the
-thing you postponed.
+thing you postponed. Notifications respect a live snooze for the same reason,
+and announce the change that ends it.
 
 A bump survives its item's label moving, because "this one matters to me" is
 not a claim about what the work is doing. Only `clear` ends it. It also
@@ -453,6 +463,52 @@ the data: `/health` carries it on the source, and `/api/work` and
 `/api/attention` carry it in `warnings`, so a consumer showing a capped list
 can say so. `healthy` stays true, because the adapter works; the answer is just
 not the whole answer.
+
+## Notifications
+
+A dashboard answers "what is waiting on me" for somebody who is looking at it.
+`[notify]` is the other half: the change worth hearing about while you are
+looking at something else.
+
+`route` names who paints the popup.
+
+`herdr` hands the notification to `notification.show` over the same local
+socket the adapter already uses. Herdr's `[ui.toast]` config then decides
+between an in-app toast and a system notification, and Herdr is the one
+component that knows whether anybody is at the terminal.
+
+`system` calls macOS Notification Center directly: `terminal-notifier` when it
+is installed, `osascript` otherwise. Take this route when Herdr has to stay
+quiet. Herdr's `[ui.toast] delivery` is a single switch over everything it
+shows, socket calls included, so `delivery = "off"` silences the `herdr` route
+with it.
+
+`labels` names what to announce. Labels, not states: `review requested` and
+`ready to merge` are both `needs_attention`, and the move between them is the
+news. Matching ignores case and surrounding space.
+
+Three rules keep it quiet enough to stay useful:
+
+- Only a change notifies. A first sighting does not, because every item is new
+  in the first poll after a restart, and announcing the whole board on startup
+  is how somebody learns to ignore these.
+- The same item repeating the same label is suppressed for 15 minutes, unless
+  the item goes back to a working state in between. GitHub computes
+  `mergeStateStatus` asynchronously and reports `UNKNOWN` while it is thinking,
+  which drops a mergeable pull request to `approved` and back on the next poll:
+  a flap, and never through a working state. An agent that finishes, runs again
+  and finishes again did the work twice, so it is announced twice.
+- A snoozed item is silent. It is the one interruption somebody has already
+  refused. The snooze lapses the moment the item's label moves, so the change
+  that ends it still arrives.
+- Delivery is best effort. A route that is not there, Herdr not running or no
+  notifier binary installed, is the normal state of a machine nobody is
+  sitting at, so a failure is logged at info and dropped. A notification is
+  worth nothing late.
+
+The cost is that a change happening while the daemon is down is never
+announced. The item is still at the top of the queue when the daemon returns,
+which is the fallback the dashboard exists to be.
 
 ## Staleness
 
