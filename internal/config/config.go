@@ -37,10 +37,11 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Config is the whole file. Each source owns one table.
 type Config struct {
-	Daemon Daemon `toml:"daemon"`
-	Events Events `toml:"events"`
-	Herdr  Herdr  `toml:"herdr"`
-	GitHub GitHub `toml:"github"`
+	Daemon   Daemon   `toml:"daemon"`
+	Events   Events   `toml:"events"`
+	Herdr    Herdr    `toml:"herdr"`
+	GitHub   GitHub   `toml:"github"`
+	Calendar Calendar `toml:"calendar"`
 }
 
 // Daemon is the listener and the logs.
@@ -77,6 +78,28 @@ type GitHub struct {
 	StaleDraftAfter Duration `toml:"stale_draft_after"`
 }
 
+// Calendar is the meetings source. It reads iCalendar feeds, one per
+// [[calendar.feeds]] entry, so several calendars can be watched at once.
+type Calendar struct {
+	Enabled bool     `toml:"enabled"`
+	Poll    Duration `toml:"poll"`
+	// Horizon is how far ahead to look.
+	Horizon Duration `toml:"horizon"`
+	// Lead is how long before a meeting starts it wants your attention.
+	Lead  Duration       `toml:"lead"`
+	Feeds []CalendarFeed `toml:"feeds"`
+}
+
+// CalendarFeed is one calendar. The address comes from url, from the
+// environment variable named by url_env, or from the email, which resolves to
+// the Google public address for that account.
+type CalendarFeed struct {
+	Email  string `toml:"email"`
+	URL    string `toml:"url"`
+	URLEnv string `toml:"url_env"`
+	Label  string `toml:"label"`
+}
+
 // Default is the configuration attentiond runs with when no file exists.
 //
 // Herdr is on: it is local, it costs one socket call, and it is the reason the
@@ -102,6 +125,14 @@ func Default() Config {
 			Poll:            Duration(time.Minute),
 			Limit:           100,
 			StaleDraftAfter: Duration(14 * 24 * time.Hour),
+		},
+		Calendar: Calendar{
+			// Off like GitHub: it reaches the network, and with no feeds
+			// configured there is nothing for it to read anyway.
+			Enabled: false,
+			Poll:    Duration(5 * time.Minute),
+			Horizon: Duration(12 * time.Hour),
+			Lead:    Duration(10 * time.Minute),
 		},
 	}
 }

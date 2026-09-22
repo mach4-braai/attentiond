@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/calendar"
 	"github.com/devanmcgeer/attentiond/internal/config"
 	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
@@ -87,6 +88,14 @@ func run() error {
 		sources[github.SourceName] = githubPoller.SourceStatus
 	}
 
+	calendarPoller, err := newCalendarPoller(cfg.Calendar, store, logger)
+	if err != nil {
+		return err
+	}
+	if calendarPoller != nil {
+		sources[calendar.SourceName] = calendarPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:   store,
 		Sources: sources,
@@ -101,6 +110,9 @@ func run() error {
 	}
 	if githubPoller != nil {
 		go githubPoller.Run(ctx)
+	}
+	if calendarPoller != nil {
+		go calendarPoller.Run(ctx)
 	}
 
 	server := &http.Server{
@@ -175,6 +187,54 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 			Interval: cfg.Poll.Std(),
 			Search:   github.Search{Scope: scope, Limit: cfg.Limit},
 			Normal:   github.Config{StaleDraftAfter: cfg.StaleDraftAfter.Std()},
+		},
+		log,
+	), nil
+}
+
+// newCalendarPoller returns nil when the calendar source is off or has no
+// feeds. A feed that cannot be resolved is fatal: a calendar silently missing
+// from the dashboard is a meeting silently missing from your day.
+func newCalendarPoller(cfg config.Calendar, store *attention.Store, log *slog.Logger) (*calendar.Poller, error) {
+	if !cfg.Enabled || len(cfg.Feeds) == 0 {
+		return nil, nil
+	}
+
+	specs := make([]calendar.FeedSpec, 0, len(cfg.Feeds))
+	for _, feed := range cfg.Feeds {
+		specs = append(specs, calendar.FeedSpec{
+			Email:  feed.Email,
+			URL:    feed.URL,
+			URLEnv: feed.URLEnv,
+			Label:  feed.Label,
+		})
+	}
+	feeds, skipped, err := calendar.ResolveFeeds(specs, os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	for _, reason := range skipped {
+		log.Warn("calendar feed skipped", "reason", reason)
+	}
+
+	labels := make([]string, 0, len(feeds))
+	for _, feed := range feeds {
+		labels = append(labels, feed.Label)
+	}
+	log.Info("calendar adapter enabled",
+		"feeds", strings.Join(labels, ","),
+		"poll", cfg.Poll.String(),
+		"horizon", cfg.Horizon.String(),
+		"lead", cfg.Lead.String())
+
+	return calendar.NewPoller(
+		calendar.NewClient(15*time.Second),
+		store,
+		calendar.PollerConfig{
+			Interval: cfg.Poll.Std(),
+			Feeds:    feeds,
+			Skipped:  skipped,
+			Normal:   calendar.Config{Horizon: cfg.Horizon.Std(), Lead: cfg.Lead.Std()},
 		},
 		log,
 	), nil
