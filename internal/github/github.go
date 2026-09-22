@@ -169,6 +169,35 @@ func NewScope(repos, orgs []string) (Scope, error) {
 	return scope, nil
 }
 
+// NewPriorityRepos validates the repositories whose review requests go to the
+// top of the queue, and returns the set the adapter looks names up in.
+//
+// A typo fails startup for the same reason a typo in repos does, but with the
+// opposite symptom: nothing is missing from the queue, it is just in the wrong
+// order, which is the kind of quiet wrong nobody notices for a week.
+//
+// Names are folded to lower case. GitHub is case-insensitive about owners and
+// repositories, and the API answers with whatever case the repository was
+// created in, so a config file saying didx-xyz/Tofu has to match.
+func NewPriorityRepos(names []string) (map[string]bool, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, repo := range names {
+		repo = strings.TrimSpace(repo)
+		if repo == "" {
+			continue
+		}
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return nil, fmt.Errorf("github priority repo %q is not owner/name", repo)
+		}
+		set[strings.ToLower(repo)] = true
+	}
+	return set, nil
+}
+
 // ParseScope reads the comma or space separated form a command line uses.
 func ParseScope(repos, orgs string) (Scope, error) {
 	return NewScope(splitList(repos), splitList(orgs))

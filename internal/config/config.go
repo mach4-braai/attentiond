@@ -37,11 +37,21 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Config is the whole file. Each source owns one table.
 type Config struct {
-	Daemon   Daemon   `toml:"daemon"`
-	Events   Events   `toml:"events"`
-	Herdr    Herdr    `toml:"herdr"`
-	GitHub   GitHub   `toml:"github"`
-	Calendar Calendar `toml:"calendar"`
+	Daemon    Daemon    `toml:"daemon"`
+	Attention Attention `toml:"attention"`
+	Events    Events    `toml:"events"`
+	Herdr     Herdr     `toml:"herdr"`
+	GitHub    GitHub    `toml:"github"`
+	Calendar  Calendar  `toml:"calendar"`
+}
+
+// Attention tunes the queue itself rather than any one source.
+type Attention struct {
+	// TopLabels are item labels that go above every rank a source can give
+	// itself. This is the one ordering decision that belongs in a file:
+	// whether something outranks the whole table is a judgement about your
+	// week, not a property of the work.
+	TopLabels []string `toml:"top_labels"`
 }
 
 // Daemon is the listener and the logs.
@@ -76,6 +86,11 @@ type GitHub struct {
 	Orgs            []string `toml:"orgs"`
 	Limit           int      `toml:"limit"`
 	StaleDraftAfter Duration `toml:"stale_draft_after"`
+	// PriorityRepos are repositories whose review requests go to the top of
+	// the queue. A review you owe in the repository that runs the
+	// infrastructure is not the same errand as one in a side project, and
+	// severity cannot say so: both are warnings.
+	PriorityRepos []string `toml:"priority_repos"`
 }
 
 // Calendar is the meetings source. It reads iCalendar feeds, one per

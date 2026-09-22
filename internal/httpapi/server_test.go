@@ -28,7 +28,7 @@ func (e *recordingExecutor) Execute(_ context.Context, kind, target, action stri
 func newTestServer(t *testing.T) (http.Handler, *attention.Store, *recordingExecutor) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := attention.NewStore(log, time.Hour)
+	store := attention.NewStore(log, attention.StoreConfig{EventTTL: time.Hour})
 	executor := &recordingExecutor{}
 
 	handler := New(Config{
@@ -99,7 +99,7 @@ func TestEventBecomesVisibleWork(t *testing.T) {
 
 func TestAnIncompleteSourceWarnsWhereTheListIsRead(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store := attention.NewStore(log, time.Hour)
+	store := attention.NewStore(log, attention.StoreConfig{EventTTL: time.Hour})
 	handler := New(Config{
 		Store: store,
 		Sources: map[string]func() attention.SourceStatus{

@@ -3,6 +3,7 @@ package github
 import (
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
@@ -35,6 +36,37 @@ type Config struct {
 	// StaleDraftAfter is how long a draft may sit untouched before it is
 	// called stale. Zero disables the distinction.
 	StaleDraftAfter time.Duration
+	// PriorityRepos are the repositories whose review requests outrank review
+	// requests everywhere else. A review you owe in the repository that runs
+	// the infrastructure is not the same errand as one in a side project.
+	PriorityRepos map[string]bool
+}
+
+// display is the tone and rank that go with each label. Keeping it beside the
+// labels is the point: the word, its colour and its place in the queue are one
+// decision, and splitting them across files is how they drift apart.
+//
+// A review request is ranked in classify instead, because its rank depends on
+// which repository asked.
+var display = map[string]struct {
+	tone     attention.Tone
+	priority int
+}{
+	// One click from finished, so it is the cheapest item on the board to
+	// clear and it sits at the top.
+	labelReadyToMerge: {attention.ToneReady, attention.PriorityOneClick},
+
+	labelChangesRequested: {attention.ToneAttention, attention.PriorityActionable},
+	labelRebaseRequired:   {attention.ToneAttention, attention.PriorityActionable},
+	labelChecksFailing:    {attention.ToneFailed, attention.PriorityActionable},
+
+	labelChecksRunning: {attention.ToneActive, attention.PriorityBackground},
+
+	// Somebody else's turn.
+	labelApproved:       {attention.ToneNeutral, attention.PriorityBackground},
+	labelAwaitingReview: {attention.ToneNeutral, attention.PriorityBackground},
+	labelDraft:          {attention.ToneNeutral, attention.PriorityBackground},
+	labelStaleDraft:     {attention.ToneNeutral, attention.PriorityBackground},
 }
 
 // classify maps one pull request onto the core model. Order matters: the first
@@ -77,6 +109,26 @@ func classify(pr PullRequest, role string, cfg Config, now time.Time) (attention
 	}
 }
 
+// rank returns the tone and queue position for a label. A review request is
+// the one label whose rank is not a property of the label alone: being asked
+// in a repository you named as important is a different errand from being
+// asked anywhere else.
+func rank(state attention.State, label, repo string, cfg Config) (attention.Tone, int) {
+	if label == labelReviewRequested {
+		if cfg.PriorityRepos[strings.ToLower(repo)] {
+			return attention.ToneAttention, attention.PriorityBlockingOthers
+		}
+		return attention.ToneAttention, attention.PriorityAsked
+	}
+	if d, ok := display[label]; ok {
+		return d.tone, d.priority
+	}
+	// A label nobody ranked. Fall back to what the state alone implies, which
+	// is wrong in a defensible direction rather than silently last.
+	_, tone := attention.DefaultDisplay(state)
+	return tone, attention.DefaultPriority(state)
+}
+
 // Normalize turns an inbox into attention items. A pull request you authored
 // and were also asked to review is reported once, as a review request, because
 // that is the half that is waiting on you.
@@ -107,6 +159,7 @@ func Normalize(inbox Inbox, cfg Config, now time.Time) []attention.Item {
 
 func newItem(pr PullRequest, role string, cfg Config, now time.Time) attention.Item {
 	state, severity, label := classify(pr, role, cfg, now)
+	tone, priority := rank(state, label, pr.Repository.NameWithOwner, cfg)
 
 	meta := map[string]string{
 		"repo":     pr.Repository.NameWithOwner,
@@ -132,6 +185,9 @@ func newItem(pr PullRequest, role string, cfg Config, now time.Time) attention.I
 		Title:    pullKey(pr) + " · " + pr.Title,
 		State:    state,
 		Severity: severity,
+		Label:    label,
+		Tone:     tone,
+		Priority: priority,
 		Context:  meta,
 		// The pull request's own updated_at, not poll time: how long something
 		// has been sitting is the useful number.

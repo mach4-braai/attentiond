@@ -7,26 +7,29 @@ import (
 	"time"
 )
 
-func testStore(t *testing.T, ttl time.Duration, clock *time.Time) *Store {
+func testStore(t *testing.T, cfg StoreConfig, clock *time.Time) *Store {
 	t.Helper()
-	store := NewStore(slog.New(slog.NewTextHandler(io.Discard, nil)), ttl)
-	store.now = func() time.Time { return *clock }
-	return store
+	cfg.Now = func() time.Time { return *clock }
+	return NewStore(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
 }
 
 func adapterItem(id string, state State, severity Severity, title string) Item {
+	label, tone := DefaultDisplay(state)
 	return Item{
 		ID:       Key("herdr", id),
 		Source:   "herdr",
 		Title:    title,
 		State:    state,
 		Severity: severity,
+		Label:    label,
+		Tone:     tone,
+		Priority: DefaultPriority(state),
 	}
 }
 
 func TestReplaceSourceDropsItemsTheAdapterStoppedReporting(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	store := testStore(t, 0, &now)
+	store := testStore(t, StoreConfig{}, &now)
 
 	store.ReplaceSource("herdr", []Item{
 		adapterItem("w1:p1", StateWorking, SeverityInfo, "attentiond · claude"),
@@ -44,7 +47,7 @@ func TestReplaceSourceDropsItemsTheAdapterStoppedReporting(t *testing.T) {
 
 func TestReplaceSourceLeavesOtherSourcesAlone(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	store := testStore(t, 0, &now)
+	store := testStore(t, StoreConfig{}, &now)
 
 	store.Put(Item{ID: Key("tofu", "plan"), Source: "tofu", State: StateWorking, Severity: SeverityInfo})
 	store.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateWorking, SeverityInfo, "a")})
@@ -58,7 +61,7 @@ func TestReplaceSourceLeavesOtherSourcesAlone(t *testing.T) {
 
 func TestUpdatedAtTracksVisibleChangeOnly(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	store := testStore(t, 0, &now)
+	store := testStore(t, StoreConfig{}, &now)
 
 	store.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateWorking, SeverityInfo, "attentiond · claude")})
 	first := store.Items()[0].UpdatedAt
@@ -78,7 +81,7 @@ func TestUpdatedAtTracksVisibleChangeOnly(t *testing.T) {
 
 func TestAttentionSelectsUnacknowledgedWork(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	store := testStore(t, 0, &now)
+	store := testStore(t, StoreConfig{}, &now)
 
 	store.ReplaceSource("herdr", []Item{
 		adapterItem("w1:p1", StateWorking, SeverityInfo, "working"),
@@ -98,14 +101,14 @@ func TestAttentionSelectsUnacknowledgedWork(t *testing.T) {
 	}
 	for i := range want {
 		if titles[i] != want[i] {
-			t.Fatalf("attention returned %v, want %v (severity should order it)", titles, want)
+			t.Fatalf("attention returned %v, want %v (priority puts done last, severity breaks the rest)", titles, want)
 		}
 	}
 }
 
 func TestTerminalEventItemsExpireButAdapterItemsDoNot(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
-	store := testStore(t, time.Hour, &now)
+	store := testStore(t, StoreConfig{EventTTL: time.Hour}, &now)
 
 	store.Put(Item{ID: Key("tofu", "apply"), Source: "tofu", State: StateFailed, Severity: SeverityCritical})
 	store.Put(Item{ID: Key("tofu", "plan"), Source: "tofu", State: StateWorking, Severity: SeverityInfo})
@@ -125,6 +128,73 @@ func TestTerminalEventItemsExpireButAdapterItemsDoNot(t *testing.T) {
 	}
 	if !ids["herdr:w1:p1"] {
 		t.Error("an adapter-owned item expired; the adapter owns its lifecycle")
+	}
+}
+
+func TestPriorityOutranksSeverityAndRecency(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	store := testStore(t, StoreConfig{}, &now)
+
+	// A mergeable pull request is the oldest and least severe thing here, and
+	// it is still what to do first.
+	ready := adapterItem("pr", StateNeedsAttention, SeverityInfo, "ready to merge")
+	ready.Priority = PriorityOneClick
+	ready.UpdatedAt = now.Add(-2 * time.Hour)
+
+	shouted := adapterItem("blocked", StateNeedsAttention, SeverityCritical, "blocked agent")
+	shouted.UpdatedAt = now
+
+	store.ReplaceSource("herdr", []Item{shouted, ready})
+
+	queue := store.Attention()
+	if len(queue) != 2 || queue[0].Title != "ready to merge" {
+		t.Fatalf("priority did not win: %+v", queue)
+	}
+}
+
+func TestDisplayFillsInWhatASourceLeftOut(t *testing.T) {
+	label, tone := Item{State: StateFailed}.Display()
+	if label != "failed" || tone != ToneFailed {
+		t.Fatalf("Display() = %q, %q for a bare failed item", label, tone)
+	}
+
+	label, tone = Item{State: StateNeedsAttention, Label: "ready to merge", Tone: ToneReady}.Display()
+	if label != "ready to merge" || tone != ToneReady {
+		t.Fatalf("Display() overrode what the source said: %q, %q", label, tone)
+	}
+}
+
+func TestTopLabelsOutrankEveryRankASourceCanGiveItself(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	store := testStore(t, StoreConfig{
+		TopLabels: map[string]bool{"waiting for approval": true},
+	}, &now)
+
+	// A meeting about to start is the highest rank any source sets.
+	meeting := adapterItem("meeting", StateNeedsAttention, SeverityWarning, "Platform standup")
+	meeting.Label = "starting soon"
+	meeting.Priority = PriorityDeadline
+
+	store.ReplaceSource("calendar", []Item{meeting})
+	store.Put(Item{
+		ID:       Key("shell", "tofu"),
+		Source:   "shell",
+		Title:    "didx-org · tofu plan -out=tfplan",
+		State:    StateNeedsAttention,
+		Severity: SeverityWarning,
+		// Matching folds case and space, because this came from a config file.
+		Label:    "  Waiting For Approval ",
+		Priority: DefaultPriority(StateNeedsAttention),
+	})
+
+	queue := store.Attention()
+	if len(queue) != 2 || queue[0].Source != "shell" {
+		t.Fatalf("a top label did not reach the top: %+v", queue)
+	}
+	// The served priority has to be the one it was sorted by, or a consumer
+	// cannot see why this is first.
+	if queue[0].Priority != PriorityTop {
+		t.Errorf("priority = %d, want %d", queue[0].Priority, PriorityTop)
 	}
 }
 
