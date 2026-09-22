@@ -112,6 +112,35 @@ func TestLoadRejectsADurationItCannotParse(t *testing.T) {
 	}
 }
 
+func TestStalePeriodIsOffUntilAFileNamesOne(t *testing.T) {
+	if got := Default().Attention.StaleAfter.Std(); got != 0 {
+		t.Fatalf("stale_after defaults to %s: work must not leave the board unasked", got)
+	}
+
+	cfg, _, err := Load(write(t, "[attention]\nstale_after = \"720h\"\nsnooze_for = \"90m\"\n"), true)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.Attention.StaleAfter.Std(); got != 720*time.Hour {
+		t.Errorf("stale_after = %s, want 720h", got)
+	}
+	if got := cfg.Attention.SnoozeFor.Std(); got != 90*time.Minute {
+		t.Errorf("snooze_for = %s, want 90m", got)
+	}
+}
+
+func TestLoadRejectsANegativePeriod(t *testing.T) {
+	// stale_after = "-720h" marks the whole board stale the moment it
+	// appears, and nothing on screen would explain the empty dashboard.
+	_, _, err := Load(write(t, "[attention]\nstale_after = \"-720h\"\n"), true)
+	if err == nil {
+		t.Fatal("a negative period was accepted")
+	}
+	if !strings.Contains(err.Error(), "attention.stale_after") {
+		t.Errorf("error = %v, want the offending key named", err)
+	}
+}
+
 func TestLoadTreatsAMissingFileAsAbsentOnlyWhenItWasNotAskedFor(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.toml")
 

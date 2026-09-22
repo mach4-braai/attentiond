@@ -31,7 +31,41 @@ addr = "127.0.0.1:7717"
 log_level = "info"   # debug, info, warn, error
 log_format = "text"  # text or json
 
+# Where snoozes and bumps are kept so they survive a restart. Empty resolves to
+# $XDG_STATE_HOME/attentiond/decisions.json, beside the pid and the log.
+#
+# Items are not in it. Every source rebuilds those within a poll; no source can
+# rebuild the fact that you decided to leave something until Monday.
+# state_file = ""
+
 [attention]
+# How long finished work stays in /api/attention. Done is in the queue at all
+# because work nobody has looked at is the point of the daemon, but only while
+# somebody might still be coming back to it: after that it sits on top of work
+# that still needs doing. It keeps appearing in /api/work, which is the whole
+# board.
+#
+# This applies to every source. Herdr only retires its own done panes when you
+# focus them, so without this a finished agent you never clicked stays in the
+# queue for as long as the pane is open.
+done_ttl = "10m"
+
+# How long an item can sit with nothing happening to it before it leaves every
+# list but /api/stale. Zero, the default, keeps everything on the board: work
+# moving out of sight is a decision to make on purpose.
+#
+# "Nothing happening" is the item's own clock, not yours. For a pull request
+# that is the last push, review or comment, so this is the age of the work
+# rather than how long you have been ignoring it.
+stale_after = "720h"  # 30 days
+
+# How long the snooze button on each item lasts. The button prints the number,
+# so this is what it says. Zero offers the open-ended snooze instead, which
+# lapses when the item's label changes rather than on a clock.
+#
+# Any single request can override it: POST /api/items/{id}/snooze?for=30m.
+snooze_for = "4h"
+
 # Labels that go above every rank a source sets for itself, including a meeting
 # about to start. This is the one ordering decision that belongs in a file:
 # whether something outranks the whole table is a judgement about your week,

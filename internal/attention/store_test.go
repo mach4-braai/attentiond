@@ -131,6 +131,40 @@ func TestTerminalEventItemsExpireButAdapterItemsDoNot(t *testing.T) {
 	}
 }
 
+func TestDoneLeavesTheQueueButStaysOnTheBoard(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	store := testStore(t, StoreConfig{DoneTTL: 10 * time.Minute}, &now)
+
+	store.ReplaceSource("herdr", []Item{
+		adapterItem("w1:p1", StateDone, SeverityInfo, "finished agent"),
+		adapterItem("w1:p2", StateNeedsAttention, SeverityWarning, "blocked agent"),
+	})
+
+	if got := len(store.Attention()); got != 2 {
+		t.Fatalf("fresh done is not in the queue: %d items", got)
+	}
+
+	now = now.Add(11 * time.Minute)
+
+	queue := store.Attention()
+	if len(queue) != 1 || queue[0].Title != "blocked agent" {
+		t.Fatalf("stale done still in the queue: %+v", queue)
+	}
+	if len(store.Items()) != 2 {
+		t.Fatal("done fell off the whole board, not just the queue")
+	}
+
+	// Herdr re-reports the same pane every two seconds for as long as it is
+	// unseen. That must not restart the clock, or done never ages out.
+	store.ReplaceSource("herdr", []Item{
+		adapterItem("w1:p1", StateDone, SeverityInfo, "finished agent"),
+		adapterItem("w1:p2", StateNeedsAttention, SeverityWarning, "blocked agent"),
+	})
+	if got := len(store.Attention()); got != 1 {
+		t.Fatalf("a repeat poll put stale done back in the queue: %d items", got)
+	}
+}
+
 func TestPriorityOutranksSeverityAndRecency(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	store := testStore(t, StoreConfig{}, &now)

@@ -27,9 +27,16 @@ type Config struct {
 	// ingestion, so an event cannot collide with adapter-owned items.
 	Sources map[string]func() attention.SourceStatus
 	Actions map[string]Executor
-	Version string
-	Started time.Time
-	Log     *slog.Logger
+	// PublicURL is the address a browser reaches this daemon on. The snooze
+	// and bump buttons are absolute hrefs built from it, the same way each
+	// adapter builds its own.
+	PublicURL string
+	// SnoozeFor is how long the offered snooze lasts. Zero offers the
+	// open-ended one, which lapses when the item's label changes.
+	SnoozeFor time.Duration
+	Version   string
+	Started   time.Time
+	Log       *slog.Logger
 }
 
 type server struct {
@@ -44,8 +51,10 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /api/work", s.work)
 	mux.HandleFunc("GET /api/attention", s.attention)
+	mux.HandleFunc("GET /api/stale", s.stale)
 	mux.HandleFunc("POST /api/events", s.ingestEvent)
 	mux.HandleFunc("POST /api/actions/{source}/{kind}/{target}/{action}", s.runAction)
+	mux.HandleFunc("POST /api/items/{key}/{decision}", s.decide)
 	return s.logRequests(mux)
 }
 
@@ -58,6 +67,10 @@ type listResponse struct {
 	// nobody has open.
 	Warnings []string         `json:"warnings,omitempty"`
 	Items    []attention.Item `json:"items"`
+	// StaleCount says how many items /api/work left out. A list that is not
+	// everything has to say so where it is read: this is the same promise
+	// Warnings makes about a capped GitHub search.
+	StaleCount int `json:"stale_count,omitempty"`
 }
 
 // warnings collects the degraded-but-working notices from every adapter.
@@ -73,17 +86,19 @@ func (s *server) warnings() []string {
 }
 
 func (s *server) work(w http.ResponseWriter, r *http.Request) {
-	items := s.cfg.Store.Items()
-	attentionCount := 0
-	for _, item := range items {
-		if item.State.NeedsAttention() {
-			attentionCount++
-		}
+	// Stale items are held back rather than filtered out of the store: the
+	// board is what is live, /api/stale is what has stopped moving, and the
+	// count below is the link between them.
+	board := s.cfg.Store.Board()
+	items := make([]attention.Item, 0, len(board.Items))
+	for _, item := range board.Items {
+		items = append(items, s.decorate(item))
 	}
 	writeJSON(w, http.StatusOK, listResponse{
 		GeneratedAt:    time.Now().UTC(),
 		Count:          len(items),
-		AttentionCount: attentionCount,
+		AttentionCount: board.Attention,
+		StaleCount:     board.Stale,
 		Warnings:       s.warnings(),
 		Items:          items,
 	})
@@ -91,6 +106,9 @@ func (s *server) work(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) attention(w http.ResponseWriter, r *http.Request) {
 	items := s.cfg.Store.Attention()
+	for i := range items {
+		items[i] = s.decorate(items[i])
+	}
 	writeJSON(w, http.StatusOK, listResponse{
 		GeneratedAt:    time.Now().UTC(),
 		Count:          len(items),
@@ -100,12 +118,36 @@ func (s *server) attention(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// stale serves the work nothing has happened to for longer than
+// [attention] stale_after: the list you read on purpose, rather than the one
+// that reads you.
+func (s *server) stale(w http.ResponseWriter, r *http.Request) {
+	all := s.cfg.Store.Items()
+	items := make([]attention.Item, 0)
+	for _, item := range all {
+		if item.Stale {
+			items = append(items, s.decorate(item))
+		}
+	}
+	writeJSON(w, http.StatusOK, listResponse{
+		GeneratedAt: time.Now().UTC(),
+		Count:       len(items),
+		StaleCount:  len(items),
+		Warnings:    s.warnings(),
+		Items:       items,
+	})
+}
+
 type healthResponse struct {
-	Status        string                            `json:"status"`
-	Version       string                            `json:"version"`
-	UptimeSeconds int64                             `json:"uptime_seconds"`
-	Items         int                               `json:"items"`
-	Sources       map[string]attention.SourceStatus `json:"sources"`
+	Status        string `json:"status"`
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Items         int    `json:"items"`
+	// Decisions is how many items carry a snooze or a bump. An empty queue
+	// with a number here has an explanation; an empty queue without one is a
+	// source that has stopped reporting.
+	Decisions int                               `json:"decisions"`
+	Sources   map[string]attention.SourceStatus `json:"sources"`
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +169,7 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 		Version:       s.cfg.Version,
 		UptimeSeconds: int64(time.Since(s.cfg.Started).Seconds()),
 		Items:         total,
+		Decisions:     len(s.cfg.Store.Decisions()),
 		Sources:       sources,
 	})
 }

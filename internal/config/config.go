@@ -47,6 +47,17 @@ type Config struct {
 
 // Attention tunes the queue itself rather than any one source.
 type Attention struct {
+	// DoneTTL is how long finished work stays in /api/attention. It keeps
+	// appearing in /api/work, which is the whole board.
+	DoneTTL Duration `toml:"done_ttl"`
+	// StaleAfter is how long an item can sit with nothing happening to it
+	// before it leaves every list but /api/stale. Zero, the default, keeps
+	// the board complete: moving work out of sight is a decision to make on
+	// purpose, in a file, with a period written next to it.
+	StaleAfter Duration `toml:"stale_after"`
+	// SnoozeFor is the length of the snooze the dashboard offers on each
+	// item. The button says the number, so this is what it says.
+	SnoozeFor Duration `toml:"snooze_for"`
 	// TopLabels are item labels that go above every rank a source can give
 	// itself. This is the one ordering decision that belongs in a file:
 	// whether something outranks the whole table is a judgement about your
@@ -60,6 +71,11 @@ type Daemon struct {
 	PublicURL string `toml:"public_url"`
 	LogLevel  string `toml:"log_level"`
 	LogFormat string `toml:"log_format"`
+	// StateFile is where snoozes and bumps are kept across restarts. Empty
+	// resolves to $XDG_STATE_HOME/attentiond/decisions.json, beside the pid
+	// and the log. Items are not in it: every source rebuilds those, and no
+	// source can rebuild a decision you made.
+	StateFile string `toml:"state_file"`
 }
 
 // Events configures the source every local process writes to, POST
@@ -128,6 +144,20 @@ func Default() Config {
 			Addr:      "127.0.0.1:7717",
 			LogLevel:  "info",
 			LogFormat: "text",
+		},
+		Attention: Attention{
+			// Ten minutes is how long "I just finished that" stays useful. A
+			// pane you have not looked at by then is not news any more, and
+			// leaving it in the queue puts finished work on top of work that
+			// still needs doing. Herdr only retires its own done items when
+			// you focus the pane, so without this they never leave.
+			DoneTTL: Duration(10 * time.Minute),
+			// Four hours is the rest of a working day from mid-morning: long
+			// enough that the item is gone while you do the thing you chose
+			// instead, short enough that it is back before you go home.
+			// StaleAfter stays zero, so nothing leaves the board until a file
+			// says how old is too old.
+			SnoozeFor: Duration(4 * time.Hour),
 		},
 		Events: Events{TTL: Duration(time.Hour)},
 		Herdr: Herdr{
@@ -199,6 +229,24 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		sort.Strings(keys)
 		return Default(), false, fmt.Errorf("%s: unknown %s: %s",
 			path, plural("key", len(keys)), strings.Join(keys, ", "))
+	}
+
+	// A negative period is not a shorter one: stale_after = "-720h" marks
+	// every item on the board stale the moment it appears, and the daemon
+	// would look empty for a reason nothing on screen explains.
+	for _, check := range []struct {
+		key   string
+		value Duration
+	}{
+		{"attention.done_ttl", cfg.Attention.DoneTTL},
+		{"attention.stale_after", cfg.Attention.StaleAfter},
+		{"attention.snooze_for", cfg.Attention.SnoozeFor},
+		{"events.ttl", cfg.Events.TTL},
+	} {
+		if check.value < 0 {
+			return Default(), false, fmt.Errorf("%s: %s %s: want zero or a period",
+				path, check.key, check.value)
+		}
 	}
 
 	return cfg, true, nil
