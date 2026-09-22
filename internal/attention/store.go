@@ -43,6 +43,13 @@ type StoreConfig struct {
 	Now func() time.Time
 }
 
+// Board is the whole live list plus the counts that go beside it.
+type Board struct {
+	Items     []Item
+	Attention int
+	Stale     int
+}
+
 // Store holds every live item in memory. Adapters own a whole source and
 // replace it wholesale on each poll; event producers put one item at a time.
 type Store struct {
@@ -51,9 +58,7 @@ type Store struct {
 	// decisions is item id to the standing instruction a human left about it.
 	// Separate from items because it outlives them: an adapter rewrites its
 	// whole source every poll, and a restart empties the map entirely.
-	decisions map[string]Decision
-	// generation orders the snapshots handed to persist, which runs without
-	// mu held. written is the newest generation on disk.
+	decisions  map[string]Decision
 	generation uint64
 	writeMu    sync.Mutex
 	written    uint64
@@ -162,24 +167,30 @@ func (s *Store) Attention() []Item {
 	return s.collect(s.queued())
 }
 
-// AttentionCount is how many items Attention would return.
-func (s *Store) AttentionCount() int {
+// Board is one read of /api/work: the live items and the counts that belong
+// beside them, taken together so a poll landing mid-request cannot leave a
+// consumer holding one snapshot's list and another snapshot's numbers.
+func (s *Store) Board() Board {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
 
-	keep, now, count := s.queued(), s.now(), 0
-	for _, item := range s.items {
-		s.apply(&item, now)
-		if keep(item) {
-			count++
+	all, keep := s.collect(nil), s.queued()
+	board := Board{Items: make([]Item, 0, len(all))}
+	for _, item := range all {
+		if item.Stale {
+			board.Stale++
+			continue
 		}
+		if keep(item) {
+			board.Attention++
+		}
+		board.Items = append(board.Items, item)
 	}
-	return count
+	return board
 }
 
-// queued is the predicate Attention and AttentionCount share. It assumes the
-// lock is held.
+// queued assumes the lock is held.
 func (s *Store) queued() func(Item) bool {
 	cutoff := time.Time{}
 	if s.cfg.DoneTTL > 0 {
@@ -267,10 +278,6 @@ func (s *Store) snapshotDecisions() []Decision {
 // human clicks buttons, and a failure to write is logged rather than returned:
 // the snooze already applies to the running daemon, and refusing the click
 // because a state directory is not writable helps nobody.
-//
-// Each call carries a full snapshot, so a write that lands after a newer one
-// would put back the older picture. Anything the file has moved past is
-// dropped.
 func (s *Store) persist(generation uint64, decisions []Decision) {
 	if s.cfg.DecisionPath == "" {
 		return

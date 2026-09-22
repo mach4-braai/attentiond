@@ -286,8 +286,10 @@ back when it becomes `ready to merge`, which is new information rather than the
 thing you postponed.
 
 A bump survives its item's label moving, because "this one matters to me" is
-not a claim about what the work is doing. It ends with `clear`, or when the
-item's source stops reporting it.
+not a claim about what the work is doing. Only `clear` ends it. It also
+survives the item leaving the board, because a source dropping an item is not
+always a statement that the work is gone: an adapter that cannot reach its
+backend reports an empty result, and Herdr not running is a normal state.
 
 One decision per item: a bump replaces a snooze and a snooze replaces a bump.
 The response is the item as it now reads. Deciding about an id the daemon does

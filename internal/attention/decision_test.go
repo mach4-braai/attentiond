@@ -223,6 +223,29 @@ func TestDecisionsSurviveARestart(t *testing.T) {
 	}
 }
 
+// Two clicks in flight carry a full snapshot each, so the older one landing
+// last would put back the picture before the newer decision.
+func TestAWriteTheFileHasMovedPastIsDiscarded(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "decisions.json")
+	store := testStore(t, StoreConfig{DecisionPath: path}, &now)
+
+	older := []Decision{{Item: "github:didx-xyz/tofu#1", Kind: DecisionBump, Label: "review requested", MadeAt: now}}
+	newer := append(append([]Decision{}, older...),
+		Decision{Item: "github:didx-xyz/tofu#2", Kind: DecisionBump, Label: "review requested", MadeAt: now})
+
+	store.persist(2, newer)
+	store.persist(1, older)
+
+	restored, err := loadDecisions(path, now)
+	if err != nil {
+		t.Fatalf("loadDecisions: %v", err)
+	}
+	if len(restored) != 2 {
+		t.Fatalf("the file holds %d decisions, want 2: the older write overwrote the newer", len(restored))
+	}
+}
+
 func TestConcurrentDecisionsAllReachTheFile(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "decisions.json")

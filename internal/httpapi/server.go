@@ -89,21 +89,16 @@ func (s *server) work(w http.ResponseWriter, r *http.Request) {
 	// Stale items are held back rather than filtered out of the store: the
 	// board is what is live, /api/stale is what has stopped moving, and the
 	// count below is the link between them.
-	all := s.cfg.Store.Items()
-	items := make([]attention.Item, 0, len(all))
-	staleCount := 0
-	for _, item := range all {
-		if item.Stale {
-			staleCount++
-			continue
-		}
+	board := s.cfg.Store.Board()
+	items := make([]attention.Item, 0, len(board.Items))
+	for _, item := range board.Items {
 		items = append(items, s.decorate(item))
 	}
 	writeJSON(w, http.StatusOK, listResponse{
 		GeneratedAt:    time.Now().UTC(),
 		Count:          len(items),
-		AttentionCount: s.cfg.Store.AttentionCount(),
-		StaleCount:     staleCount,
+		AttentionCount: board.Attention,
+		StaleCount:     board.Stale,
 		Warnings:       s.warnings(),
 		Items:          items,
 	})
