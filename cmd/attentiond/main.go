@@ -19,9 +19,11 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/attention"
 	"github.com/devanmcgeer/attentiond/internal/calendar"
 	"github.com/devanmcgeer/attentiond/internal/config"
+	"github.com/devanmcgeer/attentiond/internal/desktop"
 	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
+	"github.com/devanmcgeer/attentiond/internal/notify"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -61,34 +63,55 @@ func run() error {
 
 	started := time.Now()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	sources := map[string]func() attention.SourceStatus{}
+	actions := map[string]httpapi.Executor{}
+
+	// The Herdr client is built before the store because the Herdr route needs
+	// it and the store needs the notifier.
+	var herdrClient *herdr.Client
+	if cfg.Herdr.Enabled {
+		herdrClient = herdr.NewClient(cfg.Herdr.Socket, 5*time.Second)
+	}
+
+	var notifier *notify.Notifier
+	if cfg.Notify.Enabled && len(cfg.Notify.Labels) > 0 {
+		sender, route, err := notifySender(cfg, herdrClient)
+		if err != nil {
+			return err
+		}
+		notifier = notify.New(notify.Config{Labels: cfg.Notify.Labels}, sender, logger)
+		logger.Info("notifications enabled",
+			"route", route, "labels", strings.Join(notifier.Labels(), ","))
+	}
+
 	statePath := strings.TrimSpace(cfg.Daemon.StateFile)
 	if statePath == "" {
 		statePath = attention.DefaultDecisionPath()
 	}
-	store := attention.NewStore(logger, attention.StoreConfig{
+	storeConfig := attention.StoreConfig{
 		EventTTL:     cfg.Events.TTL.Std(),
 		DoneTTL:      cfg.Attention.DoneTTL.Std(),
 		StaleAfter:   cfg.Attention.StaleAfter.Std(),
 		TopLabels:    labelSet(cfg.Attention.TopLabels),
 		DecisionPath: statePath,
-	})
-
-	sources := map[string]func() attention.SourceStatus{}
-	actions := map[string]httpapi.Executor{}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	}
+	if notifier != nil {
+		storeConfig.Observer = notifier.Observe
+	}
+	store := attention.NewStore(logger, storeConfig)
 
 	var herdrPoller *herdr.Poller
-	if cfg.Herdr.Enabled {
-		client := herdr.NewClient(cfg.Herdr.Socket, 5*time.Second)
-		herdrPoller = herdr.NewPoller(client, store, herdr.PollerConfig{
+	if herdrClient != nil {
+		herdrPoller = herdr.NewPoller(herdrClient, store, herdr.PollerConfig{
 			Fixture:  cfg.Herdr.Fixture,
 			BaseURL:  cfg.Daemon.PublicURL,
 			Interval: cfg.Herdr.Poll.Std(),
 		}, logger)
 		sources[herdr.SourceName] = herdrPoller.SourceStatus
-		actions[herdr.SourceName] = herdr.NewActions(client, cfg.Herdr.Fixture != "")
+		actions[herdr.SourceName] = herdr.NewActions(herdrClient, cfg.Herdr.Fixture != "")
 	}
 
 	githubPoller, err := newGitHubPoller(ctx, cfg.GitHub, store, logger)
@@ -126,6 +149,9 @@ func run() error {
 	}
 	if calendarPoller != nil {
 		go calendarPoller.Run(ctx)
+	}
+	if notifier != nil {
+		go notifier.Run(ctx)
 	}
 
 	server := &http.Server{
@@ -174,9 +200,23 @@ func run() error {
 	return nil
 }
 
-// labelSet folds a configured label list into the form the store matches
-// against. Nil for an empty list, so the lookup can be skipped entirely rather
-// than hashing a string per item per poll.
+// notifySender picks the delivery route named in the file. The Herdr route
+// needs a Herdr client, so asking for it with Herdr off is a configuration
+// that cannot do what it says: fail rather than start a daemon whose
+// notifications go nowhere.
+func notifySender(cfg config.Config, client *herdr.Client) (notify.Sender, string, error) {
+	if cfg.Notify.Route == config.RouteSystem {
+		return desktop.NewNotifier(), config.RouteSystem, nil
+	}
+	if client == nil {
+		return nil, "", errors.New(`notify.route = "herdr" needs herdr.enabled = true`)
+	}
+	return herdr.NewNotifier(client, cfg.Herdr.Fixture != ""), config.RouteHerdr, nil
+}
+
+// labelSet folds a configured label list into the form the store and the
+// notifier match against. Nil for an empty list, so the lookup can be skipped
+// entirely rather than hashing a string per item per poll.
 func labelSet(labels []string) map[string]bool {
 	if len(labels) == 0 {
 		return nil

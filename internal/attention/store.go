@@ -9,8 +9,24 @@ import (
 	"time"
 )
 
-// StoreConfig tunes the store's clocks, its ordering overrides and the
-// standing human decisions it keeps.
+// Transition is one observed change to an item: it appeared, its state moved,
+// or its label moved. Label matters on its own because a source can keep a
+// state and still change what it is waiting for: "review requested" and
+// "ready to merge" are both StateNeedsAttention, and moving between them is
+// the change somebody wants to hear about.
+type Transition struct {
+	// Prev is the item as it was. It is the zero Item when Existed is false.
+	Prev Item
+	// Next is the item as it now is.
+	Next Item
+	// Existed reports whether the store already held this item. A first
+	// sighting is not the same event as a change, and a daemon that has just
+	// started sees everything for the first time.
+	Existed bool
+}
+
+// StoreConfig tunes the store's clocks, its ordering overrides, its standing
+// human decisions and its observer.
 type StoreConfig struct {
 	// TopLabels are labels promoted to PriorityTop, above every rank a source
 	// can give itself. Keys are lower case; lookups fold.
@@ -38,6 +54,9 @@ type StoreConfig struct {
 	// a restart. Empty keeps them in memory only, which is what the tests
 	// want and what a daemon with no writable state directory falls back to.
 	DecisionPath string
+	// Observer is called with every transition, outside the store lock, after
+	// the write that produced it. It must not block.
+	Observer func([]Transition)
 	// Now is the clock everything here reads: TTLs, staleness and the moment
 	// a snooze lapses. Nil means time.Now.
 	Now func() time.Time
@@ -97,9 +116,9 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 // ReplaceSource swaps the full set of items owned by one adapter. Items the
 // adapter no longer reports are dropped.
 func (s *Store) ReplaceSource(source string, items []Item) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var transitions []Transition
 
+	s.mu.Lock()
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
 		seen[item.ID] = true
@@ -113,7 +132,7 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 			item.UpdatedAt = s.now()
 		}
 		s.items[item.ID] = item
-		s.logChange(prev, existed, item)
+		transitions = s.record(transitions, prev, existed, item)
 	}
 
 	for id, item := range s.items {
@@ -124,13 +143,16 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 		s.log.Info("item removed",
 			"item_id", id, "source", item.Source, "state", string(item.State))
 	}
+	s.mu.Unlock()
+
+	s.observe(transitions)
 }
 
 // Put inserts or updates a single item and returns what was stored.
 func (s *Store) Put(item Item) Item {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var transitions []Transition
 
+	s.mu.Lock()
 	s.promote(&item)
 	now := s.now()
 	if item.UpdatedAt.IsZero() {
@@ -142,7 +164,10 @@ func (s *Store) Put(item Item) Item {
 
 	prev, existed := s.items[item.ID]
 	s.items[item.ID] = item
-	s.logChange(prev, existed, item)
+	transitions = s.record(transitions, prev, existed, item)
+	s.mu.Unlock()
+
+	s.observe(transitions)
 	return item
 }
 
@@ -364,8 +389,8 @@ func (s *Store) promote(item *Item) {
 		return
 	}
 	label, _ := item.Display()
-	// Folded because both sides of this comparison came from a config file
-	// typed by a human.
+	// Folded the same way the notifier folds its own label list: both sides of
+	// this comparison came from a config file typed by a human.
 	if s.cfg.TopLabels[strings.ToLower(strings.TrimSpace(label))] {
 		item.Priority = PriorityTop
 	}
@@ -417,8 +442,8 @@ func untilWord(until *time.Time) string {
 }
 
 // changed reports whether an item differs in a way a human would notice, which
-// is what earns it a fresh timestamp. Priority is left out: it is a function of
-// the state and the label, so it never moves on its own.
+// is what earns it a fresh timestamp and a transition. Priority is left out: it
+// is a function of the state and the label, so it never moves on its own.
 func changed(prev, next Item) bool {
 	return prev.State != next.State ||
 		prev.Label != next.Label ||
@@ -426,8 +451,15 @@ func changed(prev, next Item) bool {
 		prev.Severity != next.Severity
 }
 
-// logChange assumes the lock is held.
-func (s *Store) logChange(prev Item, existed bool, next Item) {
+// record logs a change and appends it to transitions. It assumes the lock is
+// held, and allocates nothing while a poll finds everything as it left it.
+//
+// The transition's copy of the item is marked snoozed when a live snooze
+// covers it, so the notifier can stay quiet about work a human already
+// deferred. Only the copy: applying a decision to the stored item would
+// overwrite the priority a source computed, and a snooze that lapses could
+// never give it back.
+func (s *Store) record(transitions []Transition, prev Item, existed bool, next Item) []Transition {
 	switch {
 	case !existed:
 		s.log.Info("item appeared",
@@ -438,7 +470,15 @@ func (s *Store) logChange(prev Item, existed bool, next Item) {
 			"item_id", next.ID, "source", next.Source,
 			"from", transitionWord(prev), "to", transitionWord(next),
 			"severity", string(next.Severity), "title", next.Title)
+	default:
+		return transitions
 	}
+	if decision, ok := s.decisions[next.ID]; ok && decision.Kind == DecisionSnooze {
+		if !decision.spent(s.now(), transitionWord(next)) {
+			next.Snoozed = true
+		}
+	}
+	return append(transitions, Transition{Prev: prev, Next: next, Existed: existed})
 }
 
 // transitionWord is what to call an item in a log line: the label when the
@@ -448,4 +488,14 @@ func (s *Store) logChange(prev Item, existed bool, next Item) {
 func transitionWord(item Item) string {
 	label, _ := item.Display()
 	return label
+}
+
+// observe hands transitions to the observer outside the lock. The observer
+// reaches another process, so calling it while holding the lock would stall
+// every poll and every HTTP read behind a socket dial.
+func (s *Store) observe(transitions []Transition) {
+	if len(transitions) == 0 || s.cfg.Observer == nil {
+		return
+	}
+	s.cfg.Observer(transitions)
 }
