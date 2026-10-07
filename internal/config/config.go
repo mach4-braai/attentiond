@@ -124,9 +124,9 @@ type GitHub struct {
 	Orgs            []string `toml:"orgs"`
 	Limit           int      `toml:"limit"`
 	StaleDraftAfter Duration `toml:"stale_draft_after"`
-	// PriorityRepos are repositories whose review requests go to the top of
-	// the queue. A review you owe in the repository that runs the
-	// infrastructure is not the same errand as one in a side project, and
+	// PriorityRepos are repositories whose review requests rank above the
+	// same request elsewhere. A review you owe in the repository that runs
+	// the infrastructure is not the same errand as one in a side project, and
 	// severity cannot say so: both are warnings.
 	PriorityRepos []string `toml:"priority_repos"`
 }

@@ -83,7 +83,7 @@ poll = "1m"
 repos = []                     # owner/name; empty means every repository the token sees
 orgs = []                      # account logins
 stale_draft_after = "336h"
-priority_repos = []            # owner/name; their review requests rank first
+priority_repos = []            # owner/name; their review requests rank higher
 limit = 100                    # per search, before the result is reported incomplete
 # api = "https://api.github.com/graphql"   # for GitHub Enterprise
 ```
@@ -199,9 +199,12 @@ alone leaves the queue in recency order. The ranks:
 | 110 | an item somebody bumped by hand |
 | 100 | a label named in `[attention] top_labels`; no source sets this |
 | 50 | a meeting starting soon, the only work here with a deadline |
+| 45 | a review where you are the only pending reviewer, on a pull request that is not a draft |
 | 40 | a pull request that is ready to merge |
 | 30 | a review requested in a `priority_repos` repository |
 | 20 | a review requested anywhere else |
+| 18 | a review in a `priority_repos` repository shared with another reviewer or a team |
+| 15 | a shared review anywhere else |
 | 10 | everything else that wants you: a blocked agent, failing checks, a rebase |
 | 5 | done and unread |
 | 0 | running, or somebody else's turn |
@@ -403,7 +406,7 @@ separate from the five lifecycle states, because several labels share one:
 
 | `label` | state | tone | rank | when |
 | --- | --- | --- | --- | --- |
-| `review requested` | `needs_attention` | attention | 30 or 20 | someone asked you, whatever the branch looks like |
+| `review requested` | `needs_attention` | attention | 45, 30, 20, 18 or 15 | someone asked you, whatever the branch looks like |
 | `rebase required` | `needs_attention` | attention | 10 | `mergeStateStatus` is `DIRTY` or `BEHIND` |
 | `checks failing` | `failed` | failed | 10 | head commit rollup is `FAILURE` or `ERROR` |
 | `changes requested` | `needs_attention` | attention | 10 | a reviewer sent it back |
@@ -418,13 +421,22 @@ actionable reason wins. A draft is a statement that it is not ready, so it is
 checked before anything else and stays out of the attention queue. `stale draft`
 needs `--github-stale-draft` to have elapsed since the last update.
 
-`ready to merge` is the only label with the `ready` tone and the only one
-ranked above a review request. It is finished work held up by one click, which
-makes it the cheapest thing on the board to clear.
+`ready to merge` is the only label with the `ready` tone. It is finished work
+held up by one click, which makes it the cheapest thing on the board to clear,
+so it ranks above every review request but one.
 
-A review request ranks 30 when the repository is in `[github] priority_repos`
-and 20 otherwise. Nothing else is reordered by that setting, and it is not a
-filter: a repository left out is still watched.
+That one is a review only you can give. A request ranks 45 when you are its
+only pending reviewer and the pull request is not a draft: the author is
+waiting on you and nobody else. A request shared with another reviewer, or
+made to a team, ranks below every plain one, in any repository, because
+somebody else can unblock it.
+`context.reviewers` carries the number of pending requests, counting a team as
+one.
+
+Outside the sole-reviewer case, `[github] priority_repos` lifts a request: 30
+for a plain one and 18 for a shared one, against 20 and 15 elsewhere. Nothing
+else is reordered by that setting, and it is not a filter: a repository left
+out is still watched.
 
 `mergeStateStatus` is the only field that separates "behind base" from
 "conflicting", and it still needs the `merge-info-preview` Accept header, which
