@@ -66,7 +66,7 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 func (p *Poller) pollOnce(ctx context.Context) {
-	snapshot, err := p.fetch(ctx)
+	snapshot, err := Fetch(ctx, p.client, p.cfg.Fixture)
 	if err != nil {
 		p.recordFailure(err)
 		return
@@ -76,15 +76,18 @@ func (p *Poller) pollOnce(ctx context.Context) {
 	p.recordSuccess(len(items), snapshot.Version)
 }
 
-func (p *Poller) fetch(ctx context.Context) (SessionSnapshot, error) {
-	if p.cfg.Fixture != "" {
-		raw, err := os.ReadFile(p.cfg.Fixture)
+// Fetch reads the session snapshot from a recorded fixture when one is named,
+// and from the live server otherwise. A nil client is valid only with a
+// fixture.
+func Fetch(ctx context.Context, client *Client, fixture string) (SessionSnapshot, error) {
+	if fixture != "" {
+		raw, err := os.ReadFile(fixture)
 		if err != nil {
 			return SessionSnapshot{}, err
 		}
 		return DecodeFixture(raw)
 	}
-	return p.client.Snapshot(ctx)
+	return client.Snapshot(ctx)
 }
 
 // SourceStatus reports adapter health for /health.

@@ -44,6 +44,7 @@ type Config struct {
 	Herdr     Herdr     `toml:"herdr"`
 	GitHub    GitHub    `toml:"github"`
 	Calendar  Calendar  `toml:"calendar"`
+	Spend     Spend     `toml:"spend"`
 }
 
 // Attention tunes the queue itself rather than any one source.
@@ -153,6 +154,28 @@ type CalendarFeed struct {
 	Label  string `toml:"label"`
 }
 
+// Spend is the omp cost source. It reads omp's stats.db for each omp session
+// Herdr has open, so it needs [herdr] on.
+type Spend struct {
+	Enabled bool     `toml:"enabled"`
+	Poll    Duration `toml:"poll"`
+	// DB is omp's usage index. Empty is ~/.omp/stats.db.
+	DB string `toml:"db"`
+	// Sync is the command that brings the index up to date before each
+	// read, as argv. omp indexes transcripts only when asked, so an empty
+	// list reads whatever the last `omp stats` left.
+	Sync []string `toml:"sync"`
+	// AdvisorCost is the cost in dollars at which one advisor transcript
+	// wants a human. Zero turns it off.
+	AdvisorCost float64 `toml:"advisor_cost"`
+	// LookupsPerNote is the read, grep and glob calls per advise call at
+	// which an advisor wants a human. Zero turns it off.
+	LookupsPerNote float64 `toml:"lookups_per_note"`
+	// MinLookups is how many lookups an advisor makes before the ratio
+	// counts.
+	MinLookups int `toml:"min_lookups"`
+}
+
 // Default is the configuration attentiond runs with when no file exists.
 //
 // Herdr is on: it is local, it costs one socket call, and it is the reason the
@@ -209,6 +232,20 @@ func Default() Config {
 			Poll:    Duration(5 * time.Minute),
 			Horizon: Duration(12 * time.Hour),
 			Lead:    Duration(10 * time.Minute),
+		},
+		Spend: Spend{
+			// Off: it runs omp every poll, which a machine without omp
+			// does not have.
+			Enabled: false,
+			Poll:    Duration(5 * time.Minute),
+			Sync:    []string{"omp", "stats", "--summary"},
+			// 27 of the first 344 advisor transcripts passed $25; the
+			// costliest reached $683.
+			AdvisorCost: 25,
+			// A normal month runs about 4 lookups per note. The $683
+			// transcript made 171.
+			LookupsPerNote: 20,
+			MinLookups:     100,
 		},
 	}
 }
@@ -288,6 +325,13 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 			return Default(), false, fmt.Errorf("%s: %s %s: want zero or a period",
 				path, check.key, check.value)
 		}
+	}
+
+	if cfg.Spend.Enabled && cfg.Spend.Poll <= 0 {
+		return Default(), false, fmt.Errorf("%s: spend.poll %s: want a period", path, cfg.Spend.Poll)
+	}
+	if cfg.Spend.AdvisorCost < 0 || cfg.Spend.LookupsPerNote < 0 || cfg.Spend.MinLookups < 0 {
+		return Default(), false, fmt.Errorf("%s: spend limits: want zero (off) or a positive number", path)
 	}
 
 	return cfg, true, nil

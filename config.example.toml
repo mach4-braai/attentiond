@@ -168,3 +168,25 @@ limit = 100
 
 # GraphQL endpoint. GitHub Enterprise lives at https://<host>/api/graphql.
 # api = "https://api.github.com/graphql"
+
+[spend]
+# What each omp session open in Herdr has cost today, split into main, advisor
+# and subagent, read from omp's usage index. Off by default: it runs omp every
+# poll. Needs [herdr] on, because Herdr is what says which sessions are open.
+enabled = false
+poll = "5m"
+
+# omp's usage index, opened read-only. Empty is ~/.omp/stats.db.
+# db = ""
+
+# Run before every read, as argv. omp indexes transcripts into stats.db only
+# when something asks it to; without this the numbers are as old as the last
+# `omp stats`. [] skips it.
+sync = ["omp", "stats", "--summary"]
+
+# A session goes into the attention queue when one of its advisor transcripts
+# passes either limit. Both count the transcript's whole life. 0 turns a limit
+# off.
+advisor_cost = 25          # dollars
+lookups_per_note = 20      # read, grep and glob calls per advise call
+min_lookups = 100          # below this many lookups the ratio is not judged
