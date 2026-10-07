@@ -50,6 +50,55 @@ type Agent struct {
 	CWD                   string `json:"cwd"`
 	ForegroundCWD         string `json:"foreground_cwd"`
 	Focused               bool   `json:"focused"`
+	// AgentSession is what the agent told Herdr about its own session. Absent
+	// for agents whose integration reports nothing.
+	AgentSession *AgentSession `json:"agent_session"`
+}
+
+// AgentSession is Herdr's AgentSessionInfo. Kind "path" means Value is the
+// file the agent writes its transcript to.
+type AgentSession struct {
+	Agent string `json:"agent"`
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// Transcript is an agent pane and the session file it writes, for sources
+// that read what an agent did rather than the state it is in.
+type Transcript struct {
+	PaneID    string
+	Workspace string
+	// Title is what the terminal calls itself, which for omp is the session
+	// title behind its prompt glyph.
+	Title string
+	CWD   string
+	Path  string
+}
+
+// Transcripts lists the panes running agent whose session reports a file path,
+// sorted by pane. An agent that reports no session, or an id rather than a
+// path, has no file to read and is left out.
+func Transcripts(snapshot SessionSnapshot, agent string) []Transcript {
+	workspaces := make(map[string]string, len(snapshot.Workspaces))
+	for _, workspace := range snapshot.Workspaces {
+		workspaces[workspace.WorkspaceID] = workspace.Label
+	}
+
+	var out []Transcript
+	for _, a := range snapshot.Agents {
+		if a.Agent != agent || a.AgentSession == nil || a.AgentSession.Kind != "path" || a.AgentSession.Value == "" {
+			continue
+		}
+		out = append(out, Transcript{
+			PaneID:    a.PaneID,
+			Workspace: firstNonEmpty(workspaces[a.WorkspaceID], a.WorkspaceID),
+			Title:     firstNonEmpty(a.Title, a.Name, a.TerminalTitleStripped),
+			CWD:       firstNonEmpty(a.ForegroundCWD, a.CWD),
+			Path:      a.AgentSession.Value,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PaneID < out[j].PaneID })
+	return out
 }
 
 // snapshotResult is the session.snapshot success response body.

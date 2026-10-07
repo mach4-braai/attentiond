@@ -10,6 +10,7 @@ flowchart LR
     herdr["Herdr / OMP"] -- "socket" --> attentiond
     shell["shell, tofu, CI"] -- "POST /api/events" --> attentiond
     github["GitHub"] -- "GraphQL" --> attentiond
+    omp["omp stats.db"] -- "sqlite, read-only" --> attentiond
     future["future tools"] -. "POST /api/events" .-> attentiond
 
     attentiond["attentiond"] -- "HTTP/JSON" --> dynacat["Dynacat"]
@@ -86,6 +87,15 @@ stale_draft_after = "336h"
 priority_repos = []            # owner/name; their review requests rank higher
 limit = 100                    # per search, before the result is reported incomplete
 # api = "https://api.github.com/graphql"   # for GitHub Enterprise
+
+[spend]
+enabled = false                # needs [herdr]; see below
+poll = "5m"
+# db = ""                      # default ~/.omp/stats.db
+sync = ["omp", "stats", "--summary"]   # indexes new turns before each read; [] skips it
+advisor_cost = 25              # dollars per advisor transcript; 0 is off
+lookups_per_note = 20          # advisor read/grep/glob calls per advise call; 0 is off
+min_lookups = 100              # lookups before the ratio counts
 ```
 
 A file only has to say what it changes; anything absent keeps its default. A
@@ -357,6 +367,44 @@ The socket is found the way Herdr documents it: `--herdr-socket`, then
 `HERDR_SOCKET_PATH`, then the socket for `HERDR_SESSION`, then the default
 session socket under the Herdr config directory.
 
+## Spend
+
+`[spend]` shows what each omp session open in Herdr has cost today, and puts a
+session in the attention queue when its advisor runs away. It reads nothing but
+omp's usage index, `~/.omp/stats.db`, opened read-only.
+
+The sessions come from Herdr: each omp pane reports its transcript path in the
+snapshot's `agent_session`. omp writes an advisor or subagent transcript into a
+directory named after the session, and the index tags every message with
+`agent_type`, so one session's cost splits into main, advisor and subagent.
+That is why the source needs `[herdr]` on and fails startup without it.
+
+omp only indexes transcripts when asked. `sync` is the command that asks, run
+before every read: under a second when it has little to catch up on, tens of
+seconds after days without it. A failed run leaves the numbers as they were and
+sets a warning in `/health`; every item carries `as_of`, the newest message in
+the index, so a stale number says how stale it is.
+
+| condition | state | label | tone |
+| --- | --- | --- | --- |
+| an advisor transcript has cost `advisor_cost` or more over its life | `needs_attention` | `advisor cost` | attention |
+| an advisor has made `min_lookups` or more lookups, at `lookups_per_note` or more per `advise` call | `needs_attention` | `advisor lookups` | attention |
+| neither | `waiting` | `tracking` | neutral |
+
+Cost is judged first. The advisor limits count the transcript's whole life, not
+today, because an advisor that cost $600 yesterday is still running up the same
+bill after midnight. Today's split is in the item context as `today_main`,
+`today_advisor`, `today_subagent` and `today_total`; the reported advisor, the
+one over a limit or else the costliest, is in `advisor_cost`,
+`advisor_lookups`, `advisor_notes` and `advisor_transcript`, and `reason` says
+which limit it passed. `workspace_label`, `session_title`, `pane_id`, `cwd`
+and `transcript` say which session the row is.
+
+The label names the limit and never the amount. A snooze holds until the label
+changes, so a label carrying a dollar figure would wake every poll.
+
+Open focuses the session's Herdr pane, the same action the Herdr item carries.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and
@@ -541,7 +589,9 @@ the capped GitHub search makes through `warnings`.
 
 `dynacat/attentiond.yml` is a runnable [Dynacat](https://github.com/Panonim/dynacat)
 config with three `custom-api` widgets: the attention queue with action
-buttons, the full work list, and the stale list.
+buttons, the full work list, and the stale list. Spend items are in the work
+list; a dashboard that wants a block of its own filters `/api/work` on
+`source == "spend"`.
 
 ```bash
 dynacat --config dynacat/attentiond.yml
@@ -562,9 +612,9 @@ without the templates knowing what they are.
 ## What is kept, and where
 
 Items are in memory. Herdr items are rebuilt from a snapshot within one poll of
-a restart, GitHub items within a minute, and event items are lost, which is the
-one real cost and is acceptable while the producers are builds and tests
-someone is watching.
+a restart, GitHub items within a minute, spend items within one `[spend]` poll,
+and event items are lost, which is the one real cost and is acceptable while
+the producers are builds and tests someone is watching.
 
 Snoozes and bumps are on disk, in `[daemon] state_file`. They are the only
 state here that no source can reproduce: GitHub knows whether a pull request is

@@ -163,3 +163,38 @@ func TestDecodeFixtureAcceptsEnvelopeAndBareSnapshot(t *testing.T) {
 		t.Error("a file with no snapshot in it was accepted")
 	}
 }
+
+func TestTranscriptsKeepsOnlyTheAgentsFileSessions(t *testing.T) {
+	raw := []byte(`{"version": "1", "workspaces": [{"workspace_id": "w1", "label": "tofu"}],
+	  "agents": [
+	    {"pane_id": "w1:p3", "workspace_id": "w1", "agent": "omp", "terminal_title_stripped": "π > Plan",
+	     "cwd": "/a", "foreground_cwd": "/a/b",
+	     "agent_session": {"agent": "omp", "kind": "path", "value": "/s/one.jsonl"}},
+	    {"pane_id": "w1:p1", "workspace_id": "w2", "agent": "omp",
+	     "agent_session": {"agent": "omp", "kind": "path", "value": "/s/two.jsonl"}},
+	    {"pane_id": "w1:p2", "workspace_id": "w1", "agent": "omp"},
+	    {"pane_id": "w1:p4", "workspace_id": "w1", "agent": "omp",
+	     "agent_session": {"agent": "omp", "kind": "id", "value": "abc"}},
+	    {"pane_id": "w1:p5", "workspace_id": "w1", "agent": "claude",
+	     "agent_session": {"agent": "claude", "kind": "path", "value": "/c/x.jsonl"}}
+	  ]}`)
+	snapshot, err := DecodeFixture(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := Transcripts(snapshot, "omp")
+	want := []Transcript{
+		// A workspace Herdr has no record of falls back to its id.
+		{PaneID: "w1:p1", Workspace: "w2", Path: "/s/two.jsonl"},
+		{PaneID: "w1:p3", Workspace: "tofu", Title: "π > Plan", CWD: "/a/b", Path: "/s/one.jsonl"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("transcript %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

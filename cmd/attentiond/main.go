@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
 	"github.com/devanmcgeer/attentiond/internal/notify"
+	"github.com/devanmcgeer/attentiond/internal/spend"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -130,6 +132,14 @@ func run() error {
 		sources[calendar.SourceName] = calendarPoller.SourceStatus
 	}
 
+	spendPoller, err := newSpendPoller(cfg, herdrClient, store, logger)
+	if err != nil {
+		return err
+	}
+	if spendPoller != nil {
+		sources[spend.SourceName] = spendPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:     store,
 		Sources:   sources,
@@ -149,6 +159,9 @@ func run() error {
 	}
 	if calendarPoller != nil {
 		go calendarPoller.Run(ctx)
+	}
+	if spendPoller != nil {
+		go spendPoller.Run(ctx)
 	}
 	if notifier != nil {
 		go notifier.Run(ctx)
@@ -330,6 +343,54 @@ func newCalendarPoller(cfg config.Calendar, store *attention.Store, log *slog.Lo
 		},
 		log,
 	), nil
+}
+
+// newSpendPoller returns nil when the spend source is off. It reads cost for
+// the omp sessions Herdr has open, so turning it on with Herdr off is a file
+// that cannot do what it says.
+func newSpendPoller(cfg config.Config, client *herdr.Client, store *attention.Store, log *slog.Logger) (*spend.Poller, error) {
+	if !cfg.Spend.Enabled {
+		return nil, nil
+	}
+	if client == nil {
+		return nil, errors.New("[spend] needs [herdr] enabled: it reads cost for the omp sessions Herdr has open")
+	}
+	db := strings.TrimSpace(cfg.Spend.DB)
+	if db == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("spend: locate ~/.omp/stats.db: %w", err)
+		}
+		db = filepath.Join(home, ".omp", "stats.db")
+	}
+
+	log.Info("spend adapter enabled",
+		"db", db,
+		"poll", cfg.Spend.Poll.String(),
+		"sync", strings.Join(cfg.Spend.Sync, " "),
+		"advisor_cost", cfg.Spend.AdvisorCost,
+		"lookups_per_note", cfg.Spend.LookupsPerNote,
+		"min_lookups", cfg.Spend.MinLookups)
+
+	fixture := cfg.Herdr.Fixture
+	return spend.NewPoller(store, spend.PollerConfig{
+		Interval: cfg.Spend.Poll.Std(),
+		DB:       db,
+		Sync:     cfg.Spend.Sync,
+		BaseURL:  cfg.Daemon.PublicURL,
+		Sessions: func(ctx context.Context) ([]herdr.Transcript, error) {
+			snapshot, err := herdr.Fetch(ctx, client, fixture)
+			if err != nil {
+				return nil, err
+			}
+			return herdr.Transcripts(snapshot, "omp"), nil
+		},
+		Normal: spend.Config{
+			AdvisorCost:    cfg.Spend.AdvisorCost,
+			LookupsPerNote: cfg.Spend.LookupsPerNote,
+			MinLookups:     cfg.Spend.MinLookups,
+		},
+	}, log), nil
 }
 
 // resolveConfig layers the command line over the file over the defaults. The
