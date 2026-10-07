@@ -355,6 +355,20 @@ func TestReviewScopeIsOnlyForAReviewYouOwe(t *testing.T) {
 	}
 }
 
+func TestReviewScopeIsUnsetWhenTheRequestNamesNobody(t *testing.T) {
+	// requestedReviewer is nullable, for example when the account was deleted.
+	// One request that names nobody is neither you alone nor a team, so the
+	// dashboard gets no answer rather than a wrong one.
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	pr := pull(1, func(pr *PullRequest) {
+		pr.ReviewRequests = ReviewRequests{TotalCount: 1, Nodes: []ReviewRequest{{}}}
+	})
+	items := Normalize(Inbox{Login: "mcgeerdev", ReviewRequested: []PullRequest{pr}}, Config{}, now)
+	if got, ok := items[0].Context["review_scope"]; ok {
+		t.Errorf("review_scope = %q, want none", got)
+	}
+}
+
 func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
 	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
