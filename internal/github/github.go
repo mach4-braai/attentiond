@@ -81,11 +81,12 @@ type PullRequest struct {
 	UpdatedAt  time.Time  `json:"updatedAt"`
 	Repository Repository `json:"repository"`
 	// Author is null for pull requests whose account is gone.
-	Author           *Actor  `json:"author"`
-	ReviewDecision   string  `json:"reviewDecision"`
-	Mergeable        string  `json:"mergeable"`
-	MergeStateStatus string  `json:"mergeStateStatus"`
-	Commits          Commits `json:"commits"`
+	Author           *Actor         `json:"author"`
+	ReviewDecision   string         `json:"reviewDecision"`
+	Mergeable        string         `json:"mergeable"`
+	MergeStateStatus string         `json:"mergeStateStatus"`
+	Commits          Commits        `json:"commits"`
+	ReviewRequests   ReviewRequests `json:"reviewRequests"`
 }
 
 // Repository is the owner/name pair an item is reported under.
@@ -96,6 +97,27 @@ type Repository struct {
 // Actor is a GitHub account.
 type Actor struct {
 	Login string `json:"login"`
+}
+
+// ReviewRequests are the reviews a pull request is still waiting for. A
+// request is removed once its reviewer submits a review.
+type ReviewRequests struct {
+	TotalCount int `json:"totalCount"`
+	// Nodes holds the first request only. Who it names matters only when it
+	// is the only one.
+	Nodes []ReviewRequest `json:"nodes"`
+}
+
+// ReviewRequest wraps one requested reviewer.
+type ReviewRequest struct {
+	// RequestedReviewer is nullable in GitHub's schema.
+	RequestedReviewer *Reviewer `json:"requestedReviewer"`
+}
+
+// Reviewer is a user or a team asked for a review. Login is empty for a team.
+type Reviewer struct {
+	Typename string `json:"__typename"`
+	Login    string `json:"login"`
 }
 
 // Commits carries the head commit, which is where check results live.
@@ -278,6 +300,7 @@ fragment pr on PullRequest{
   author{login}
   reviewDecision mergeable mergeStateStatus
   commits(last:1){nodes{commit{statusCheckRollup{state}}}}
+  reviewRequests(first:1){totalCount nodes{requestedReviewer{__typename ...on User{login}}}}
 }`
 
 type graphQLRequest struct {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/devanmcgeer/attentiond/internal/attention"
 )
 
 // node renders one pull request, enough to decode.
@@ -82,6 +84,25 @@ func TestInboxDecodesNullsGitHubActuallySends(t *testing.T) {
 		if got := (*requests)[i].Variables["q"].(string); !strings.Contains(got, want) {
 			t.Errorf("query %d = %q, want it to contain %q", i, got, want)
 		}
+	}
+}
+
+func TestInboxDecodesWhoAReviewIsWaitingOn(t *testing.T) {
+	pending := `{"number":9,"title":"t","url":"u","isDraft":false,
+	  "updatedAt":"2026-10-07T07:50:01Z","repository":{"nameWithOwner":"o/r"},
+	  "author":{"login":"jdoe"},"reviewDecision":"REVIEW_REQUIRED","mergeable":"MERGEABLE",
+	  "mergeStateStatus":"BLOCKED","commits":{"nodes":[]},
+	  "reviewRequests":{"totalCount":1,"nodes":[{"requestedReviewer":{"__typename":"User","login":"mcgeerdev"}}]}}`
+	server, _ := recordingServer(t, page("", false, ""), page(pending, false, ""), page("", false, ""))
+
+	inbox, err := NewClient(server.URL, "t0ken", 5*time.Second).
+		Inbox(context.Background(), Search{Limit: 10})
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	items := Normalize(inbox, Config{}, time.Now())
+	if len(items) != 1 || items[0].Priority != attention.PrioritySoleReviewer {
+		t.Fatalf("items = %+v, want one sole review at %d", items, attention.PrioritySoleReviewer)
 	}
 }
 

@@ -90,6 +90,11 @@ const (
 	// only item in this stack that stops being actionable once it has passed,
 	// so it outranks everything a source can rank for itself.
 	PriorityDeadline = 50
+	// PrioritySoleReviewer is a pull request ready for review that waits on
+	// you and nobody else. It sits above PriorityOneClick because only you
+	// can unblock it, and below PriorityDeadline so it never outranks a
+	// meeting about to start.
+	PrioritySoleReviewer = 45
 	// PriorityOneClick is finished work waiting on a single action.
 	PriorityOneClick = 40
 	// PriorityBlockingOthers is somebody else waiting on you in a repository
@@ -97,6 +102,12 @@ const (
 	PriorityBlockingOthers = 30
 	// PriorityAsked is somebody else waiting on you anywhere else.
 	PriorityAsked = 20
+	// PrioritySharedBlockingOthers is a request in a repository you have
+	// named as important that other reviewers can also answer. It sits below
+	// every plain request: somebody else can unblock it.
+	PrioritySharedBlockingOthers = 18
+	// PrioritySharedAsk is the same shared request anywhere else.
+	PrioritySharedAsk = 15
 	// PriorityActionable is the default for work that wants you: a blocked
 	// agent, a failed command, a pull request that needs a rebase.
 	PriorityActionable = 10
