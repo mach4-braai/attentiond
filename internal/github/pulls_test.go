@@ -260,6 +260,111 @@ func TestPriorityRepoMatchingIgnoresCase(t *testing.T) {
 	}
 }
 
+var (
+	me        = Reviewer{Typename: "User", Login: "mcgeerdev"}
+	colleague = Reviewer{Typename: "User", Login: "jdoe"}
+	team      = Reviewer{Typename: "Team"}
+)
+
+// requested shapes a pull request's pending review requests the way the
+// search returns them: the total, and the first request only.
+func requested(reviewers ...Reviewer) func(*PullRequest) {
+	return func(pr *PullRequest) {
+		pr.ReviewRequests = ReviewRequests{TotalCount: len(reviewers)}
+		if len(reviewers) > 0 {
+			first := reviewers[0]
+			pr.ReviewRequests.Nodes = []ReviewRequest{{RequestedReviewer: &first}}
+		}
+	}
+}
+
+func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+
+	cases := []struct {
+		name                  string
+		draft                 bool
+		reviewers             []Reviewer
+		inPriority, elsewhere int
+	}{
+		{
+			name: "you alone on a ready pull request", reviewers: []Reviewer{me},
+			inPriority: attention.PrioritySoleReviewer, elsewhere: attention.PrioritySoleReviewer,
+		},
+		{
+			name: "you alone on a draft", draft: true, reviewers: []Reviewer{me},
+			inPriority: attention.PriorityBlockingOthers, elsewhere: attention.PriorityAsked,
+		},
+		{
+			name: "a team as the only request", reviewers: []Reviewer{team},
+			inPriority: attention.PrioritySharedBlockingOthers, elsewhere: attention.PrioritySharedAsk,
+		},
+		{
+			name: "you and another reviewer", reviewers: []Reviewer{me, colleague},
+			inPriority: attention.PrioritySharedBlockingOthers, elsewhere: attention.PrioritySharedAsk,
+		},
+	}
+
+	for _, tc := range cases {
+		for repo, want := range map[string]int{
+			"didx-xyz/tofu":       tc.inPriority,
+			"mcgeerdev/portfolio": tc.elsewhere,
+		} {
+			t.Run(tc.name+" in "+repo, func(t *testing.T) {
+				pr := pull(1, func(pr *PullRequest) {
+					pr.IsDraft = tc.draft
+					pr.Repository = Repository{NameWithOwner: repo}
+					requested(tc.reviewers...)(pr)
+				})
+				items := Normalize(Inbox{Login: "McGeerDev", ReviewRequested: []PullRequest{pr}}, cfg, now)
+				if items[0].Label != labelReviewRequested || items[0].Priority != want {
+					t.Errorf("label = %q priority = %d, want %q at %d",
+						items[0].Label, items[0].Priority, labelReviewRequested, want)
+				}
+				if got, want := items[0].Context["reviewers"], strconv.Itoa(len(tc.reviewers)); got != want {
+					t.Errorf("context[reviewers] = %q, want %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+	elsewhere := func(pr *PullRequest) { pr.Repository = Repository{NameWithOwner: "mcgeerdev/portfolio"} }
+
+	sole := pull(1, func(pr *PullRequest) { elsewhere(pr); requested(me)(pr) })
+	plain := pull(2, nil)
+	shared := pull(3, requested(me, colleague))
+	mergeable := pull(4, func(pr *PullRequest) {
+		pr.ReviewDecision = "APPROVED"
+		pr.MergeStateStatus = "CLEAN"
+	})
+
+	items := Normalize(Inbox{
+		Login:           "mcgeerdev",
+		ReviewRequested: []PullRequest{sole, plain, shared},
+		Authored:        []PullRequest{mergeable},
+	}, cfg, now)
+
+	rank := map[string]int{}
+	for _, item := range items {
+		rank[item.Context["number"]] = item.Priority
+	}
+	// A sole review in a repository nobody named still beats ready to merge
+	// and every review request in a priority repository.
+	if !(rank["1"] > rank["4"] && rank["4"] > rank["2"] && rank["2"] > rank["3"]) {
+		t.Errorf("ranks sole=%d ready=%d plain=%d shared=%d, want them in that order",
+			rank["1"], rank["4"], rank["2"], rank["3"])
+	}
+	if !(rank["1"] < attention.PriorityDeadline) {
+		t.Errorf("a sole review (%d) outranked a meeting about to start (%d)",
+			rank["1"], attention.PriorityDeadline)
+	}
+}
+
 func TestAPullRequestYouApprovedStaysOnTheBoard(t *testing.T) {
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 
