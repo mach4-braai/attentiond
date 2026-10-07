@@ -479,7 +479,11 @@ waiting on you and nobody else. A request shared with another reviewer, or
 made to a team, ranks below every plain one, in any repository, because
 somebody else can unblock it.
 `context.reviewers` carries the number of pending requests, counting a team as
-one.
+one. `context.review_scope` says who else was asked, on a review you owe:
+`sole` when it is you alone, as a user and not through a team, and `shared`
+when another reviewer or a team can answer it. A draft can be `sole` without
+the rank. The key is there so a dashboard does not have to read the rank back:
+a bump or a `top_labels` match replaces it.
 
 Outside the sole-reviewer case, `[github] priority_repos` lifts a request: 30
 for a plain one and 18 for a shared one, against 20 and 15 elsewhere. Nothing

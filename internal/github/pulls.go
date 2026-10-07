@@ -148,7 +148,13 @@ func rank(state attention.State, label string, pr PullRequest, login string, cfg
 // soleReviewer reports whether a pull request that is ready for review waits
 // on login and on nobody else.
 func soleReviewer(pr PullRequest, login string) bool {
-	if pr.IsDraft || login == "" || pr.ReviewRequests.TotalCount != 1 || len(pr.ReviewRequests.Nodes) != 1 {
+	return !pr.IsDraft && onlyYou(pr, login)
+}
+
+// onlyYou reports whether login, as a user rather than through a team, is the
+// one pending review request.
+func onlyYou(pr PullRequest, login string) bool {
+	if login == "" || pr.ReviewRequests.TotalCount != 1 || len(pr.ReviewRequests.Nodes) != 1 {
 		return false
 	}
 	reviewer := pr.ReviewRequests.Nodes[0].RequestedReviewer
@@ -164,6 +170,23 @@ func sharedReview(pr PullRequest) bool {
 	}
 	return len(requests.Nodes) == 1 && requests.Nodes[0].RequestedReviewer != nil &&
 		requests.Nodes[0].RequestedReviewer.Typename == "Team"
+}
+
+// reviewScope says who else was asked, for a pull request waiting on your
+// review: "sole" when it is you alone, "shared" when another reviewer or a team
+// can answer it. The rank already reflects this, but a bump or a top label
+// replaces the rank, and a dashboard that reads the number back loses it.
+// Empty when the request list says neither, which leaves the key unset.
+func reviewScope(pr PullRequest, role, login string) string {
+	switch {
+	case role != roleReviewer:
+		return ""
+	case onlyYou(pr, login):
+		return "sole"
+	case sharedReview(pr):
+		return "shared"
+	}
+	return ""
 }
 
 // Normalize turns an inbox into attention items. A pull request reached by more
@@ -211,6 +234,7 @@ func newItem(pr PullRequest, role, login string, cfg Config, now time.Time) atte
 		"reviewers": strconv.Itoa(pr.ReviewRequests.TotalCount),
 	}
 	putIfSet(meta, "review_decision", pr.ReviewDecision)
+	putIfSet(meta, "review_scope", reviewScope(pr, role, login))
 	putIfSet(meta, "mergeable", pr.Mergeable)
 	putIfSet(meta, "merge_state", pr.MergeStateStatus)
 	putIfSet(meta, "checks", pr.Checks())
