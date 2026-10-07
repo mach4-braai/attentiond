@@ -287,22 +287,28 @@ func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
 		draft                 bool
 		reviewers             []Reviewer
 		inPriority, elsewhere int
+		scope                 string
 	}{
 		{
 			name: "you alone on a ready pull request", reviewers: []Reviewer{me},
 			inPriority: attention.PrioritySoleReviewer, elsewhere: attention.PrioritySoleReviewer,
+			scope: "sole",
 		},
 		{
+			// Still only you, even though a draft does not get the rank.
 			name: "you alone on a draft", draft: true, reviewers: []Reviewer{me},
 			inPriority: attention.PriorityBlockingOthers, elsewhere: attention.PriorityAsked,
+			scope: "sole",
 		},
 		{
 			name: "a team as the only request", reviewers: []Reviewer{team},
 			inPriority: attention.PrioritySharedBlockingOthers, elsewhere: attention.PrioritySharedAsk,
+			scope: "shared",
 		},
 		{
 			name: "you and another reviewer", reviewers: []Reviewer{me, colleague},
 			inPriority: attention.PrioritySharedBlockingOthers, elsewhere: attention.PrioritySharedAsk,
+			scope: "shared",
 		},
 	}
 
@@ -325,7 +331,26 @@ func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
 				if got, want := items[0].Context["reviewers"], strconv.Itoa(len(tc.reviewers)); got != want {
 					t.Errorf("context[reviewers] = %q, want %q", got, want)
 				}
+				if got := items[0].Context["review_scope"]; got != tc.scope {
+					t.Errorf("context[review_scope] = %q, want %q", got, tc.scope)
+				}
 			})
+		}
+	}
+}
+
+func TestReviewScopeIsOnlyForAReviewYouOwe(t *testing.T) {
+	// Reviewers on your own pull request, or on one you already reviewed, say
+	// nothing about who else could answer for you.
+	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
+	items := Normalize(Inbox{
+		Login:    "mcgeerdev",
+		Authored: []PullRequest{pull(1, requested(colleague))},
+		Reviewed: []PullRequest{pull(2, requested(colleague, team))},
+	}, Config{}, now)
+	for _, item := range items {
+		if got, ok := item.Context["review_scope"]; ok {
+			t.Errorf("%s (role %s) has review_scope %q, want none", item.ID, item.Context["role"], got)
 		}
 	}
 }
