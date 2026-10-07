@@ -337,6 +337,7 @@ func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 
 	sole := pull(1, func(pr *PullRequest) { elsewhere(pr); requested(me)(pr) })
 	plain := pull(2, nil)
+	plainElsewhere := pull(5, elsewhere)
 	shared := pull(3, requested(me, colleague))
 	mergeable := pull(4, func(pr *PullRequest) {
 		pr.ReviewDecision = "APPROVED"
@@ -345,7 +346,7 @@ func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 
 	items := Normalize(Inbox{
 		Login:           "mcgeerdev",
-		ReviewRequested: []PullRequest{sole, plain, shared},
+		ReviewRequested: []PullRequest{sole, plain, plainElsewhere, shared},
 		Authored:        []PullRequest{mergeable},
 	}, cfg, now)
 
@@ -354,10 +355,11 @@ func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 		rank[item.Context["number"]] = item.Priority
 	}
 	// A sole review in a repository nobody named still beats ready to merge
-	// and every review request in a priority repository.
-	if !(rank["1"] > rank["4"] && rank["4"] > rank["2"] && rank["2"] > rank["3"]) {
-		t.Errorf("ranks sole=%d ready=%d plain=%d shared=%d, want them in that order",
-			rank["1"], rank["4"], rank["2"], rank["3"])
+	// and every review request in a priority repository. A shared request in
+	// a priority repository still loses to a plain one anywhere.
+	if !(rank["1"] > rank["4"] && rank["4"] > rank["2"] && rank["2"] > rank["5"] && rank["5"] > rank["3"]) {
+		t.Errorf("ranks sole=%d ready=%d plain=%d plain elsewhere=%d shared=%d, want them in that order",
+			rank["1"], rank["4"], rank["2"], rank["5"], rank["3"])
 	}
 	if !(rank["1"] < attention.PriorityDeadline) {
 		t.Errorf("a sole review (%d) outranked a meeting about to start (%d)",

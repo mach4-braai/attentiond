@@ -149,11 +149,12 @@ orgs = ["your-org"]
 # Repositories whose review requests rank above the same request elsewhere. A
 # review you owe in the repository that runs the infrastructure is not the same
 # errand as one in a side project, and severity cannot say so: both are
-# warnings. A review where you are the only pending reviewer ranks above both.
+# warnings. A review where you are the only pending reviewer ranks above both,
+# and a review shared with others ranks below every plain one.
 #
 # Nothing else is reordered, and this is not a filter. A repository left out is
-# still watched, its review requests just rank below these. Matching ignores
-# case; a malformed entry fails startup like repos does.
+# still watched, its review requests just rank below the same request here.
+# Matching ignores case; a malformed entry fails startup like repos does.
 priority_repos = ["owner/name"]
 
 # A draft untouched for longer than this is reported as a stale draft rather

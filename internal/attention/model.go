@@ -100,12 +100,13 @@ const (
 	// PriorityBlockingOthers is somebody else waiting on you in a repository
 	// you have named as important.
 	PriorityBlockingOthers = 30
-	// PrioritySharedBlockingOthers is the same request shared with other
-	// reviewers, any of whom can unblock it.
-	PrioritySharedBlockingOthers = 25
 	// PriorityAsked is somebody else waiting on you anywhere else.
 	PriorityAsked = 20
-	// PrioritySharedAsk is the same request shared with other reviewers.
+	// PrioritySharedBlockingOthers is a request in a repository you have
+	// named as important that other reviewers can also answer. It sits below
+	// every plain request: somebody else can unblock it.
+	PrioritySharedBlockingOthers = 18
+	// PrioritySharedAsk is the same shared request anywhere else.
 	PrioritySharedAsk = 15
 	// PriorityActionable is the default for work that wants you: a blocked
 	// agent, a failed command, a pull request that needs a rebase.

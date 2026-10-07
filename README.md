@@ -202,9 +202,9 @@ alone leaves the queue in recency order. The ranks:
 | 45 | a review where you are the only pending reviewer, on a pull request that is not a draft |
 | 40 | a pull request that is ready to merge |
 | 30 | a review requested in a `priority_repos` repository |
-| 25 | the same, shared with another reviewer or a team |
 | 20 | a review requested anywhere else |
-| 15 | the same, shared with another reviewer or a team |
+| 18 | a review in a `priority_repos` repository shared with another reviewer or a team |
+| 15 | a shared review anywhere else |
 | 10 | everything else that wants you: a blocked agent, failing checks, a rebase |
 | 5 | done and unread |
 | 0 | running, or somebody else's turn |
@@ -406,7 +406,7 @@ separate from the five lifecycle states, because several labels share one:
 
 | `label` | state | tone | rank | when |
 | --- | --- | --- | --- | --- |
-| `review requested` | `needs_attention` | attention | 45, 30, 25, 20 or 15 | someone asked you, whatever the branch looks like |
+| `review requested` | `needs_attention` | attention | 45, 30, 20, 18 or 15 | someone asked you, whatever the branch looks like |
 | `rebase required` | `needs_attention` | attention | 10 | `mergeStateStatus` is `DIRTY` or `BEHIND` |
 | `checks failing` | `failed` | failed | 10 | head commit rollup is `FAILURE` or `ERROR` |
 | `changes requested` | `needs_attention` | attention | 10 | a reviewer sent it back |
@@ -428,12 +428,13 @@ so it ranks above every review request but one.
 That one is a review only you can give. A request ranks 45 when you are its
 only pending reviewer and the pull request is not a draft: the author is
 waiting on you and nobody else. A request shared with another reviewer, or
-made to a team, ranks below a plain one, because somebody else can unblock it.
+made to a team, ranks below every plain one, in any repository, because
+somebody else can unblock it.
 `context.reviewers` carries the number of pending requests, counting a team as
 one.
 
 Outside the sole-reviewer case, `[github] priority_repos` lifts a request: 30
-for a plain one and 25 for a shared one, against 20 and 15 elsewhere. Nothing
+for a plain one and 18 for a shared one, against 20 and 15 elsewhere. Nothing
 else is reordered by that setting, and it is not a filter: a repository left
 out is still watched.
 
