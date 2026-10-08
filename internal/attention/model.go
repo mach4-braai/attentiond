@@ -223,6 +223,9 @@ type Item struct {
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 	// Bumped reports that a human raised this item to PriorityBumped.
 	Bumped bool `json:"bumped,omitempty"`
+	// Watched reports that a human asked attentiond to act on this pull
+	// request: rebase it when it conflicts and answer review comments.
+	Watched bool `json:"watched,omitempty"`
 	// Stale reports that nothing has happened to this item for longer than
 	// [attention] stale_after. It is served by /api/stale and by nothing
 	// else: a month-old pull request is archaeology, and leaving it on the
