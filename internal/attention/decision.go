@@ -97,20 +97,30 @@ type state struct {
 	decisions map[string]Decision
 	watches   map[string]Watch
 	jobs      map[string]Job
+	// handled is item id to the comment ids already given to a tool.
+	handled map[string][]string
 }
 
 func emptyState() state {
-	return state{decisions: map[string]Decision{}, watches: map[string]Watch{}, jobs: map[string]Job{}}
+	return state{
+		decisions: map[string]Decision{},
+		watches:   map[string]Watch{},
+		jobs:      map[string]Job{},
+		handled:   map[string][]string{},
+	}
 }
 
 // decisionFile is the on-disk form: a version and a list, so a future field
 // arrives without guessing at what an older file meant. Version 1 had no
-// watches or jobs and still loads.
+// watches, jobs or comment cursor and still loads.
 type decisionFile struct {
 	Version   int        `json:"version"`
 	Decisions []Decision `json:"decisions"`
 	Watches   []Watch    `json:"watches,omitempty"`
 	Jobs      []Job      `json:"jobs,omitempty"`
+	// HandledComments is item id to the comment ids a tool has been given,
+	// so a restart does not hand the same review to an agent twice.
+	HandledComments map[string][]string `json:"handled_comments,omitempty"`
 }
 
 const decisionFileVersion = 2
@@ -171,6 +181,12 @@ func loadState(path string, now time.Time) (state, error) {
 		}
 		out.jobs[job.Item] = job
 	}
+	// A cursor is only read while its item is watched.
+	for item, ids := range file.HandledComments {
+		if _, watched := out.watches[item]; watched && len(ids) > 0 {
+			out.handled[item] = ids
+		}
+	}
 	return out, nil
 }
 
@@ -184,7 +200,13 @@ func saveState(path string, saved state) error {
 		return err
 	}
 
-	file := decisionFile{Version: decisionFileVersion, Decisions: make([]Decision, 0, len(saved.decisions))}
+	file := decisionFile{
+		Version:   decisionFileVersion,
+		Decisions: make([]Decision, 0, len(saved.decisions)),
+	}
+	if len(saved.handled) > 0 {
+		file.HandledComments = saved.handled
+	}
 	for _, decision := range saved.decisions {
 		file.Decisions = append(file.Decisions, decision)
 	}

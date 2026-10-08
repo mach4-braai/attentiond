@@ -401,33 +401,9 @@ func (c *Client) searchPage(ctx context.Context, query string, first int, after 
 	if after != "" {
 		variables["after"] = after
 	}
-	body, err := json.Marshal(graphQLRequest{Query: searchQuery, Variables: variables})
+	raw, err := c.post(ctx, searchQuery, variables)
 	if err != nil {
 		return graphQLResponse{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return graphQLResponse{}, err
-	}
-	req.Header.Set("Authorization", "bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	// mergeStateStatus, which is the only field that separates "behind base"
-	// from "conflicting", is still behind this preview.
-	req.Header.Set("Accept", "application/vnd.github.merge-info-preview+json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return graphQLResponse{}, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return graphQLResponse{}, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return graphQLResponse{}, fmt.Errorf("github graphql: %s: %s", resp.Status, firstLine(raw))
 	}
 
 	var decoded graphQLResponse
@@ -439,6 +415,40 @@ func (c *Client) searchPage(ctx context.Context, query string, first int, after 
 		return graphQLResponse{}, fmt.Errorf("github graphql: %s", decoded.Errors[0].Message)
 	}
 	return decoded, nil
+}
+
+// post sends one GraphQL request and returns the body of a 200 answer. The
+// caller decodes it, errors array included.
+func (c *Client) post(ctx context.Context, query string, variables map[string]any) ([]byte, error) {
+	body, err := json.Marshal(graphQLRequest{Query: query, Variables: variables})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	// mergeStateStatus, which is the only field that separates "behind base"
+	// from "conflicting", is still behind this preview.
+	req.Header.Set("Accept", "application/vnd.github.merge-info-preview+json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github graphql: %s: %s", resp.Status, firstLine(raw))
+	}
+	return raw, nil
 }
 
 func firstLine(raw []byte) string {
