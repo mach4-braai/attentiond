@@ -1,0 +1,269 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fafaf8;
+  --text: #1c1c1e;
+  --muted: #5f5f66;
+  --line: #deded8;
+  --ready: #9a5b00;
+  --negative: #b3261e;
+  --positive: #1b7a3a;
+  --active: #1f5fbf;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --text: #e6e6e8;
+    --muted: #9a9aa2;
+    --line: #2d2f35;
+    --ready: #e8a020;
+    --negative: #ff7b72;
+    --positive: #56d364;
+    --active: #79b8ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 62rem;
+  padding: 1.5rem 1rem 4rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+h2,
+summary {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+section {
+  margin-bottom: 2rem;
+}
+
+#status,
+.count,
+.note,
+.empty,
+.meta,
+.when {
+  color: var(--muted);
+}
+
+#status {
+  font-size: 0.85rem;
+}
+
+#status.error,
+.warning,
+.action-error {
+  color: var(--negative);
+}
+
+.warning {
+  margin: 0 0 0.5rem;
+}
+
+.count {
+  font-weight: 400;
+}
+
+.note,
+.empty {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+ul.items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: 0.4rem 0 0.5rem 0.5rem;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--line);
+}
+
+.item.ready {
+  border-left-color: var(--ready);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.label {
+  flex: none;
+  min-width: 9rem;
+  font-size: 0.85rem;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snoozed .title,
+.muted .title {
+  color: var(--muted);
+}
+
+.when {
+  flex: none;
+  font-size: 0.85rem;
+}
+
+.meta,
+.job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  margin-top: 0.15rem;
+  padding-left: 9.75rem;
+  font-size: 0.85rem;
+}
+
+.job {
+  color: var(--muted);
+}
+
+.job-tool {
+  font-weight: 600;
+}
+
+.job-log {
+  font: 0.8rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.job-log-name {
+  margin-right: -0.75rem;
+}
+
+.mark {
+  font: 600 0.85rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+
+.mark.watched {
+  padding: 0 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  color: var(--active);
+}
+
+.label.tone-ready {
+  color: var(--ready);
+  font-weight: 600;
+}
+
+.label.tone-attention,
+.label.tone-failed,
+.job-result.tone-attention,
+.job-result.tone-failed {
+  color: var(--negative);
+}
+
+.label.tone-active {
+  color: var(--active);
+}
+
+.label.tone-done,
+.job-result.tone-done {
+  color: var(--positive);
+}
+
+.label.tone-neutral {
+  color: var(--muted);
+}
+
+.glyph {
+  display: inline-block;
+  min-width: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+}
+
+.job-result {
+  font-weight: 600;
+}
+
+a,
+button {
+  color: var(--active);
+}
+
+button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.action-error {
+  margin-left: 0.5rem;
+}
+
+summary {
+  cursor: pointer;
+}
+
+@media (max-width: 40rem) {
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .label {
+    min-width: 0;
+  }
+
+  .title {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+
+  .meta,
+  .job {
+    padding-left: 0;
+  }
+}
