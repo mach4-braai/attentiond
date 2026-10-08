@@ -50,9 +50,10 @@ type StoreConfig struct {
 	// the board forever, which is the default: dropping work out of the main
 	// view is a decision somebody has to make on purpose.
 	StaleAfter time.Duration
-	// DecisionPath is the file snoozes and bumps are kept in, so they survive
-	// a restart. Empty keeps them in memory only, which is what the tests
-	// want and what a daemon with no writable state directory falls back to.
+	// DecisionPath is the file snoozes, bumps and watches are kept in, so
+	// they survive a restart. Empty keeps them in memory only, which is what
+	// the tests want and what a daemon with no writable state directory
+	// falls back to.
 	DecisionPath string
 	// Observer is called with every transition, outside the store lock, after
 	// the write that produced it. It must not block.
@@ -77,7 +78,10 @@ type Store struct {
 	// decisions is item id to the standing instruction a human left about it.
 	// Separate from items because it outlives them: an adapter rewrites its
 	// whole source every poll, and a restart empties the map entirely.
-	decisions  map[string]Decision
+	decisions map[string]Decision
+	// watches is item id to a human's request that attentiond act on it,
+	// kept apart from decisions so a watched item can still be snoozed.
+	watches    map[string]Watch
 	generation uint64
 	writeMu    sync.Mutex
 	written    uint64
@@ -86,7 +90,8 @@ type Store struct {
 	now        func() time.Time
 }
 
-// NewStore returns a store holding the decisions an earlier run left behind.
+// NewStore returns a store holding the decisions and watches an earlier run
+// left behind.
 //
 // A decisions file that cannot be read costs a warning rather than the daemon.
 // The file is machine-written, the worst case is a few snoozes to make again,
@@ -97,16 +102,18 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	decisions, err := loadDecisions(cfg.DecisionPath, now())
+	saved, err := loadState(cfg.DecisionPath, now())
 	if err != nil {
 		log.Warn("decisions not restored", "path", cfg.DecisionPath, "error", err)
-		decisions = map[string]Decision{}
-	} else if len(decisions) > 0 {
-		log.Info("decisions restored", "path", cfg.DecisionPath, "count", len(decisions))
+		saved = emptyState()
+	} else if len(saved.decisions) > 0 || len(saved.watches) > 0 {
+		log.Info("decisions restored", "path", cfg.DecisionPath,
+			"count", len(saved.decisions), "watches", len(saved.watches))
 	}
 	return &Store{
 		items:     make(map[string]Item),
-		decisions: decisions,
+		decisions: saved.decisions,
+		watches:   saved.watches,
 		cfg:       cfg,
 		log:       log,
 		now:       now,
@@ -119,8 +126,11 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 	var transitions []Transition
 
 	s.mu.Lock()
+	now := s.now()
 	seen := make(map[string]bool, len(items))
+	saveSeen := false
 	for _, item := range items {
+		saveSeen = s.see(item.ID, now) || saveSeen
 		seen[item.ID] = true
 		s.promote(&item)
 		prev, existed := s.items[item.ID]
@@ -129,7 +139,7 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 			// timestamp and let "updated 12m ago" stay meaningful.
 			item.UpdatedAt = prev.UpdatedAt
 		} else if item.UpdatedAt.IsZero() {
-			item.UpdatedAt = s.now()
+			item.UpdatedAt = now
 		}
 		s.items[item.ID] = item
 		transitions = s.record(transitions, prev, existed, item)
@@ -143,8 +153,10 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 		s.log.Info("item removed",
 			"item_id", id, "source", item.Source, "state", string(item.State))
 	}
+	generation, snapshot := s.stageIf(saveSeen)
 	s.mu.Unlock()
 
+	s.persist(generation, snapshot)
 	s.observe(transitions)
 }
 
@@ -165,8 +177,10 @@ func (s *Store) Put(item Item) Item {
 	prev, existed := s.items[item.ID]
 	s.items[item.ID] = item
 	transitions = s.record(transitions, prev, existed, item)
+	generation, snapshot := s.stageIf(s.see(item.ID, now))
 	s.mu.Unlock()
 
+	s.persist(generation, snapshot)
 	s.observe(transitions)
 	return item
 }
@@ -180,6 +194,18 @@ func (s *Store) Items() []Item {
 	defer s.mu.Unlock()
 	s.sweep()
 	return s.collect(nil)
+}
+
+// Get returns one item as every list would show it.
+func (s *Store) Get(key string) (Item, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweep()
+	item, ok := s.items[key]
+	if ok {
+		s.apply(&item, s.now())
+	}
+	return item, ok
 }
 
 // Attention returns the subset of items that need a human now: work in an
@@ -250,8 +276,7 @@ func (s *Store) Decide(key string, kind DecisionKind, until time.Time) (Item, er
 	}
 	s.decisions[key] = decision
 	s.apply(&item, now)
-	s.generation++
-	generation, snapshot := s.generation, s.snapshotDecisions()
+	generation, snapshot := s.stage()
 	s.mu.Unlock()
 
 	s.log.Info("decision recorded",
@@ -272,8 +297,7 @@ func (s *Store) Clear(key string) (Item, error) {
 	}
 	delete(s.decisions, key)
 	s.apply(&item, s.now())
-	s.generation++
-	generation, snapshot := s.generation, s.snapshotDecisions()
+	generation, snapshot := s.stage()
 	s.mu.Unlock()
 
 	s.log.Info("decision cleared", "item_id", key, "title", item.Title)
@@ -281,15 +305,63 @@ func (s *Store) Clear(key string) (Item, error) {
 	return item, nil
 }
 
+// Watch asks attentiond to act on one item. Which items qualify is the
+// caller's rule; the store keeps the watch and writes it to disk. Watching an
+// item twice keeps the first watch.
+func (s *Store) Watch(key string) (Item, error) {
+	s.mu.Lock()
+	item, ok := s.items[key]
+	if !ok {
+		s.mu.Unlock()
+		return Item{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
+	}
+	now := s.now()
+	if _, watched := s.watches[key]; !watched {
+		s.watches[key] = Watch{Item: key, MadeAt: now, SeenAt: now}
+	}
+	s.apply(&item, now)
+	generation, snapshot := s.stage()
+	s.mu.Unlock()
+
+	s.log.Info("watch recorded", "item_id", key, "title", item.Title)
+	s.persist(generation, snapshot)
+	return item, nil
+}
+
+// Unwatch takes a watch back.
+func (s *Store) Unwatch(key string) (Item, error) {
+	s.mu.Lock()
+	item, ok := s.items[key]
+	if !ok {
+		s.mu.Unlock()
+		return Item{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
+	}
+	delete(s.watches, key)
+	s.apply(&item, s.now())
+	generation, snapshot := s.stage()
+	s.mu.Unlock()
+
+	s.log.Info("watch cleared", "item_id", key, "title", item.Title)
+	s.persist(generation, snapshot)
+	return item, nil
+}
+
+// Watches returns every watch, ordered by item id.
+func (s *Store) Watches() []Watch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Watch, 0, len(s.watches))
+	for _, watch := range s.watches {
+		out = append(out, watch)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Item < out[b].Item })
+	return out
+}
+
 // Decisions returns the standing instructions, for /health and for tests.
 func (s *Store) Decisions() []Decision {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.snapshotDecisions()
-}
-
-// snapshotDecisions assumes the lock is held. The file is written outside it.
-func (s *Store) snapshotDecisions() []Decision {
 	out := make([]Decision, 0, len(s.decisions))
 	for _, decision := range s.decisions {
 		out = append(out, decision)
@@ -297,12 +369,50 @@ func (s *Store) snapshotDecisions() []Decision {
 	return out
 }
 
+// see moves a watched item's SeenAt forward, and reports whether that is worth
+// a write. It assumes the lock is held.
+func (s *Store) see(id string, now time.Time) bool {
+	watch, ok := s.watches[id]
+	if !ok || now.Sub(watch.SeenAt) < seenEvery {
+		return false
+	}
+	watch.SeenAt = now
+	s.watches[id] = watch
+	return true
+}
+
+// stage numbers a write and copies what it will save. It assumes the lock is
+// held; the file is written outside it.
+func (s *Store) stage() (uint64, state) {
+	s.generation++
+	saved := state{
+		decisions: make(map[string]Decision, len(s.decisions)),
+		watches:   make(map[string]Watch, len(s.watches)),
+	}
+	for key, decision := range s.decisions {
+		saved.decisions[key] = decision
+	}
+	for key, watch := range s.watches {
+		saved.watches[key] = watch
+	}
+	return s.generation, saved
+}
+
+// stageIf is stage for a write path that usually has nothing to save. A zero
+// generation tells persist to skip.
+func (s *Store) stageIf(dirty bool) (uint64, state) {
+	if !dirty {
+		return 0, state{}
+	}
+	return s.stage()
+}
+
 // persist writes the decisions out. It runs outside the lock, at the rate a
 // human clicks buttons, and a failure to write is logged rather than returned:
 // the snooze already applies to the running daemon, and refusing the click
 // because a state directory is not writable helps nobody.
-func (s *Store) persist(generation uint64, decisions []Decision) {
-	if s.cfg.DecisionPath == "" {
+func (s *Store) persist(generation uint64, saved state) {
+	if s.cfg.DecisionPath == "" || generation == 0 {
 		return
 	}
 
@@ -312,11 +422,7 @@ func (s *Store) persist(generation uint64, decisions []Decision) {
 		return
 	}
 
-	set := make(map[string]Decision, len(decisions))
-	for _, decision := range decisions {
-		set[decision.Item] = decision
-	}
-	if err := saveDecisions(s.cfg.DecisionPath, set); err != nil {
+	if err := saveState(s.cfg.DecisionPath, saved); err != nil {
 		s.log.Warn("decisions not saved", "path", s.cfg.DecisionPath, "error", err)
 		return
 	}
@@ -423,6 +529,8 @@ func (s *Store) apply(item *Item, now time.Time) {
 			}
 		}
 	}
+
+	_, item.Watched = s.watches[item.ID]
 
 	// A bump is a statement that this one still matters, so it answers the
 	// staleness question on its own. Nothing else does: a snoozed item that

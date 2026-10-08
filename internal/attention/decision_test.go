@@ -228,19 +228,21 @@ func TestAWriteTheFileHasMovedPastIsDiscarded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "decisions.json")
 	store := testStore(t, StoreConfig{DecisionPath: path}, &now)
 
-	older := []Decision{{Item: "github:didx-xyz/tofu#1", Kind: DecisionBump, Label: "review requested", MadeAt: now}}
-	newer := append(append([]Decision{}, older...),
-		Decision{Item: "github:didx-xyz/tofu#2", Kind: DecisionBump, Label: "review requested", MadeAt: now})
+	older := emptyState()
+	older.decisions["github:didx-xyz/tofu#1"] = Decision{Item: "github:didx-xyz/tofu#1", Kind: DecisionBump, Label: "review requested", MadeAt: now}
+	newer := emptyState()
+	newer.decisions["github:didx-xyz/tofu#1"] = older.decisions["github:didx-xyz/tofu#1"]
+	newer.decisions["github:didx-xyz/tofu#2"] = Decision{Item: "github:didx-xyz/tofu#2", Kind: DecisionBump, Label: "review requested", MadeAt: now}
 
 	store.persist(2, newer)
 	store.persist(1, older)
 
-	restored, err := loadDecisions(path, now)
+	restored, err := loadState(path, now)
 	if err != nil {
-		t.Fatalf("loadDecisions: %v", err)
+		t.Fatalf("loadState: %v", err)
 	}
-	if len(restored) != 2 {
-		t.Fatalf("the file holds %d decisions, want 2: the older write overwrote the newer", len(restored))
+	if len(restored.decisions) != 2 {
+		t.Fatalf("the file holds %d decisions, want 2: the older write overwrote the newer", len(restored.decisions))
 	}
 }
 
@@ -269,12 +271,12 @@ func TestConcurrentDecisionsAllReachTheFile(t *testing.T) {
 	}
 	wg.Wait()
 
-	restored, err := loadDecisions(path, now)
+	restored, err := loadState(path, now)
 	if err != nil {
-		t.Fatalf("loadDecisions: %v", err)
+		t.Fatalf("loadState: %v", err)
 	}
-	if len(restored) != count {
-		t.Fatalf("the file holds %d of %d decisions: a write landed after a newer one", len(restored), count)
+	if len(restored.decisions) != count {
+		t.Fatalf("the file holds %d of %d decisions: a write landed after a newer one", len(restored.decisions), count)
 	}
 }
 
