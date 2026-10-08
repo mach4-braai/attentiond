@@ -33,6 +33,40 @@ go run ./cmd/attentiond                 # against a live Herdr server
 go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json
 ```
 
+## Tools
+
+The three scripts in `tools/` take an `owner/repo` and a PR number. Set
+`ATTENTIOND_CHECKOUT` to the absolute path of a local clone with an `origin`
+remote. Each script fetches the PR head and base, works in its own detached
+worktree, and removes that worktree on exit, including on SIGTERM. The caller
+captures stdout and stderr as the run log.
+
+| Script | Action |
+| --- | --- |
+| `rebase.sh` | Rebase onto the base without a model; push with a lease, or report conflicting files. |
+| `agent-rebase.sh` | Ask omp to resolve clear conflicts; push with a lease only after checking the result. |
+| `agent-comments.sh` | Give omp the runner's filtered `$ATTENTIOND_COMMENTS` JSON file; push a committed fix without force, or ask for human review. |
+
+Run one by hand from the repository root:
+
+```bash
+ATTENTIOND_CHECKOUT=/absolute/path/to/clone tools/rebase.sh owner/repo 123
+```
+
+For `agent-comments.sh`, also set `ATTENTIOND_COMMENTS` to the path of the
+runner-filtered JSON file. The runner, not the script, checks comment authors
+against its allowlist. Do not pass unfiltered comments to the script. The
+comment policy does not allow tests yet; review and run them before relying on
+a pushed fix. Agent sessions use `anthropic/claude-sonnet-5-5` with medium
+thinking unless `ATTENTIOND_MODEL` or `ATTENTIOND_THINKING` overrides it.
+
+The final `RESULT:` line is the runner's outcome. `rebased <sha>` and
+`pushed <sha>` mean the wrapper pushed; `up-to-date` means no rebase was
+needed; `needs-conflicts <files>` means a plain rebase hit conflicts; and
+`needs-human <reason>` means the agent declined or the wrapper refused to
+push. The agent's own `committed` result is internal to its wrapper. A missing
+result or a killed run counts as failed.
+
 ## Configuration
 
 Settings live in a file, not on a command line, so a new source means a new
