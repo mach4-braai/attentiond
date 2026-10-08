@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>attentiond</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>attentiond</h1>
+    <span id="status" role="status">Loading</span>
+  </header>
+
+  <div id="warnings"></div>
+
+  <main>
+    <section id="needs-me">
+      <h2>Needs me <span class="count"></span></h2>
+      <p class="empty">Nothing is waiting on you.</p>
+      <ul class="items"></ul>
+    </section>
+
+    <section id="working" hidden>
+      <h2>Agents working <span class="count"></span></h2>
+      <p class="empty">No agent is running.</p>
+      <ul class="items"></ul>
+    </section>
+
+    <section id="finished" hidden>
+      <h2>Agent finished <span class="count"></span></h2>
+      <p class="empty">No agent has finished.</p>
+      <ul class="items"></ul>
+    </section>
+
+    <section id="work">
+      <h2>All work <span class="count"></span></h2>
+      <p class="note" id="stale-note" hidden></p>
+      <p class="empty">Nothing in flight.</p>
+      <ul class="items"></ul>
+    </section>
+
+    <section id="stale">
+      <details>
+        <summary>Stale <span class="count"></span></summary>
+        <p class="empty">Nothing has been forgotten.</p>
+        <ul class="items"></ul>
+      </details>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
