@@ -96,19 +96,21 @@ const seenEvery = 24 * time.Hour
 type state struct {
 	decisions map[string]Decision
 	watches   map[string]Watch
+	jobs      map[string]Job
 }
 
 func emptyState() state {
-	return state{decisions: map[string]Decision{}, watches: map[string]Watch{}}
+	return state{decisions: map[string]Decision{}, watches: map[string]Watch{}, jobs: map[string]Job{}}
 }
 
 // decisionFile is the on-disk form: a version and a list, so a future field
 // arrives without guessing at what an older file meant. Version 1 had no
-// watches and still loads.
+// watches or jobs and still loads.
 type decisionFile struct {
 	Version   int        `json:"version"`
 	Decisions []Decision `json:"decisions"`
 	Watches   []Watch    `json:"watches,omitempty"`
+	Jobs      []Job      `json:"jobs,omitempty"`
 }
 
 const decisionFileVersion = 2
@@ -122,7 +124,8 @@ const decisionFileVersion = 2
 // entry each and are cleared the first time their item is seen again, so they
 // are left alone: a pull request absent from one poll because GitHub timed out
 // is not a reason to forget you deferred it. A watch is the exception, dropped
-// once its item has been gone for watchTTL.
+// once its item has been gone for watchTTL, and so is a finished job that old.
+// A job still queued or running is kept: the runner starts it again.
 func loadState(path string, now time.Time) (state, error) {
 	out := emptyState()
 	if path == "" {
@@ -162,6 +165,12 @@ func loadState(path string, now time.Time) (state, error) {
 		}
 		out.watches[watch.Item] = watch
 	}
+	for _, job := range file.Jobs {
+		if job.Item == "" || (!job.Pending() && now.Sub(job.latest()) > watchTTL) {
+			continue
+		}
+		out.jobs[job.Item] = job
+	}
 	return out, nil
 }
 
@@ -182,6 +191,9 @@ func saveState(path string, saved state) error {
 	for _, watch := range saved.watches {
 		file.Watches = append(file.Watches, watch)
 	}
+	for _, job := range saved.jobs {
+		file.Jobs = append(file.Jobs, job)
+	}
 	// Sorted so that a file a human opens reads the same way twice, and so a
 	// diff of it shows what changed rather than what moved.
 	sort.Slice(file.Decisions, func(a, b int) bool {
@@ -189,6 +201,9 @@ func saveState(path string, saved state) error {
 	})
 	sort.Slice(file.Watches, func(a, b int) bool {
 		return file.Watches[a].Item < file.Watches[b].Item
+	})
+	sort.Slice(file.Jobs, func(a, b int) bool {
+		return file.Jobs[a].Item < file.Jobs[b].Item
 	})
 
 	data, err := json.MarshalIndent(file, "", "  ")

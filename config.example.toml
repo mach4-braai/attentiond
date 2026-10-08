@@ -111,7 +111,11 @@ route = "herdr"
 # is suppressed for 15 minutes to survive GitHub reporting a mergeable branch
 # as unknown and back again. Work starting again clears that: an agent that
 # finishes twice in ten minutes finished twice.
-labels = ["ready to merge", "checks running"]
+#
+# "needs human" and "agent failed" are what a tool on a watched pull request
+# reports when it hands the work back. They notify even on a snoozed item,
+# because the new label ends the snooze.
+labels = ["ready to merge", "checks running", "needs human", "agent failed"]
 
 [herdr]
 # Herdr's agent states (working, idle, blocked, done) arrive over its local

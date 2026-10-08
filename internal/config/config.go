@@ -207,12 +207,13 @@ func Default() Config {
 		Events: Events{TTL: Duration(time.Hour)},
 		Notify: Notify{
 			// On, unlike GitHub and the calendar: delivery is a local socket
-			// call to Herdr, which either answers or does not, and the two
-			// default labels are both changes somebody waiting on a build
-			// wants to hear without watching a tab.
+			// call to Herdr, which either answers or does not. The first two
+			// labels are changes somebody waiting on a build wants to hear
+			// without watching a tab; the last two are a tool on a watched
+			// pull request handing the work back.
 			Enabled: true,
 			Route:   RouteHerdr,
-			Labels:  []string{"ready to merge", "checks running"},
+			Labels:  []string{"ready to merge", "checks running", "needs human", "agent failed"},
 		},
 		Herdr: Herdr{
 			Enabled: true,

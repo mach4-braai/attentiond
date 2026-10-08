@@ -123,7 +123,7 @@ func (s *server) decorate(item attention.Item) attention.Item {
 
 	// A fresh slice: the stored item's Actions belongs to the store, and
 	// appending to it would write into state a poll is still reading.
-	actions := make([]attention.Action, 0, len(item.Actions)+3)
+	actions := make([]attention.Action, 0, len(item.Actions)+4)
 	actions = append(actions, item.Actions...)
 
 	if item.Snoozed {
@@ -159,6 +159,12 @@ func (s *server) decorate(item attention.Item) attention.Item {
 	case watchable(item):
 		actions = append(actions, attention.Action{
 			ID: "watch", Label: "Watch", Method: "POST", Href: base + "/" + decisionWatch,
+		})
+	}
+
+	if item.Job != nil && item.Job.Status == attention.JobFinished {
+		actions = append(actions, attention.Action{
+			ID: "clear", Label: "Dismiss", Method: "POST", Href: base + "/" + decisionClear,
 		})
 	}
 

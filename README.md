@@ -104,7 +104,7 @@ ttl = "1h"                     # how long finished /api/events items stay visibl
 [notify]
 enabled = true
 route = "herdr"                # herdr or system; see below
-labels = ["ready to merge", "checks running"]
+labels = ["ready to merge", "checks running", "needs human", "agent failed"]
 
 [herdr]
 enabled = true
@@ -271,6 +271,7 @@ These fields carry what a human decided rather than what a source observed:
 | `snoozed`, `snoozed_until` | deferred; out of `/api/attention`, still on the board. No `snoozed_until` means it lasts until the label changes |
 | `bumped` | raised to 110 by hand, and exempt from going stale |
 | `watched` | a pull request you authored that attentiond may act on |
+| `job` | the latest tool run on the item; see `GET /api/jobs` |
 | `stale` | nothing has happened to it for longer than `stale_after`; served only by `/api/stale` |
 
 `attention` is derived from `state`, so a consumer never has to restate the
@@ -378,6 +379,48 @@ watched ones an `unwatch` action.
 Watches are kept in the same file. A watch whose pull request has not been
 reported for 14 days is dropped at the next start: GitHub only reports open
 pull requests, so that is a pull request that merged or closed.
+
+`clear` also dismisses a finished job. A queued or running one stays, because
+its tool has yet to report. An item with a finished job carries a `clear`
+action labelled `Dismiss`.
+
+### `GET /api/jobs`
+
+The items a tool is working on or has reported on, newest job first, in the
+same envelope as `/api/work`. Stale items are included: a tool that finished on
+a quiet pull request still has something to say.
+
+```json
+"job": {
+  "item": "github:didx-xyz/tofu#42",
+  "tool": "rebase",
+  "status": "finished",
+  "result": "needs-conflicts",
+  "detail": "main.tf variables.tf",
+  "log": "/Users/me/.local/state/attentiond/runs/github_didx-xyz_tofu_42-rebase-20260912T120000Z.log",
+  "queued_at": "2026-09-12T12:00:00Z",
+  "started_at": "2026-09-12T12:00:00Z",
+  "finished_at": "2026-09-12T12:00:41Z"
+}
+```
+
+`status` is `queued`, `running` or `finished`. `result` is the word the tool
+printed on its `RESULT:` line, or `failed` when it printed none or ran out of
+time. While a job exists it changes how its item reads:
+
+| Job | `label` | `tone` | `state` |
+| --- | --- | --- | --- |
+| queued or running | `agent <tool>` | `active` | `working` |
+| finished, `needs-human` | `needs human` | `attention` | `needs_attention` |
+| finished, `failed` | `agent failed` | `failed` | `needs_attention` |
+| finished, anything else | the source's own | the source's own | the source's own |
+
+A running tool takes its item out of `/api/attention`, because nothing is
+waiting on you. A tool that gives up puts it back with a label that says so,
+and the label change ends any snooze, so `needs human` and `agent failed`
+notify even on a snoozed item. The job stays on the item until the next job
+starts or you dismiss it. Jobs are kept in `[daemon] state_file` with the
+decisions.
 
 ### `GET /health`
 
