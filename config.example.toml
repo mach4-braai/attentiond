@@ -6,7 +6,7 @@
 #
 #   Herdr / OMP ──┐
 #   shell / tofu ─┤
-#   GitHub ───────┼──▶ attentiond ──▶ Dynacat
+#   GitHub ───────┼──▶ attentiond ──▶ web page at /
 #   future tools ─┘
 #
 # Every key below shows its default, so a real config only needs the lines it

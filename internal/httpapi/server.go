@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/ui"
 )
 
 // Executor runs one action for a source. attentiond owns the route grammar;
@@ -56,6 +57,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/events", s.ingestEvent)
 	mux.HandleFunc("POST /api/actions/{source}/{kind}/{target}/{action}", s.runAction)
 	mux.HandleFunc("POST /api/items/{key}/{decision}", s.decide)
+	mux.Handle("GET /", ui.Handler())
 	return s.logRequests(mux)
 }
 

@@ -1,9 +1,9 @@
 # attentiond
 
-Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON for UIs such as Dynacat.
+Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON and as a web page.
 
-It is not a frontend. It holds state, answers questions about it, and decides
-when a change is worth interrupting somebody for.
+It holds state, answers questions about it, and decides when a change is
+worth interrupting somebody for.
 
 ```mermaid
 flowchart LR
@@ -13,15 +13,15 @@ flowchart LR
     omp["omp stats.db"] -- "sqlite, read-only" --> attentiond
     future["future tools"] -. "POST /api/events" .-> attentiond
 
-    attentiond["attentiond"] -- "HTTP/JSON" --> dynacat["Dynacat"]
-    dynacat -- "POST /api/actions/…" --> attentiond
+    attentiond["attentiond"] -- "GET /, HTTP/JSON" --> page["Browser page"]
+    page -- "POST /api/actions/…" --> attentiond
 
     attentiond -- "focus pane, tab, workspace" --> herdr
     attentiond -- "notification.show" --> herdr
     attentiond -- "Notification Center" --> desktop["macOS"]
 ```
 
-Sources push or are polled; the dashboard only reads and asks attentiond to
+Sources push or are polled; the page only reads and asks attentiond to
 act. The arrow back into Herdr putting you in front of the work is the point
 of the daemon holding state at all. The two notification arrows are one or the
 other: `[notify] route` picks which.
@@ -32,6 +32,8 @@ other: `[notify] route` picks which.
 go run ./cmd/attentiond                 # against a live Herdr server
 go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json
 ```
+
+Then open <http://127.0.0.1:7717/>.
 
 ## Tools
 
@@ -812,29 +814,41 @@ Nothing is dropped silently: `/api/work` carries `stale_count`, so a board that
 is not the whole picture says how much it is missing. This is the same promise
 the capped GitHub search makes through `warnings`.
 
-## Dynacat
+## The page
 
-`dynacat/attentiond.yml` is a runnable [Dynacat](https://github.com/Panonim/dynacat)
-config with three `custom-api` widgets: the attention queue with action
-buttons, the full work list, and the stale list. Spend items are in the work
-list; a dashboard that wants a block of its own filters `/api/work` on
-`source == "spend"`.
+attentiond serves a page at `GET /`, for example <http://127.0.0.1:7717/>. It
+is one HTML file, one script and one stylesheet, embedded in the binary from
+`internal/ui`. There is no build step and the page makes no request to any
+other host.
 
-```bash
-dynacat --config dynacat/attentiond.yml
-```
+From the top it shows:
 
-Dynacat rather than Glance, which it forks, because its widgets refresh
-themselves: a queue that only changes when you reload is a queue you have to
-remember to reload. The widgets read `label` and `tone` and render items in the
-order the daemon sent them.
+- Needs me: `/api/attention`.
+- Agents working: jobs that are `queued` or `running`, from `/api/jobs`, with
+  the tool, when it started and the log path.
+- Agent finished: finished jobs, with the result, the detail and the log path.
+- All work: `/api/work`, with `stale_count` as "N stale, below".
+- Stale: `/api/stale`, collapsed.
 
-Action buttons send a `fetch`, not a form submission: Dynacat serves
-`form-action 'self'`, so a form posting to attentiond on another port is
-dropped by the browser before it leaves. Clicking Open focuses the Herdr pane,
-and Snooze or Bump changes the queue, without navigating the dashboard away.
-The widgets render whatever actions an item carries, so new controls arrive
-without the templates knowing what they are.
+Agent sections are hidden when `/api/jobs` answers 404. Spend items are in All
+work.
+
+Each row shows the label with a glyph for its tone (`>` ready, `!` attention,
+`x` failed, `~` active, `.` done), so colour is never the only signal. `zz`
+marks a snoozed item, `^` a bumped one, and Watched an item attentiond acts
+on. Warnings from any source appear above the lists.
+
+The page refreshes every 5 seconds and pauses while its tab is hidden.
+
+It renders whatever actions an item carries, so new controls arrive without
+the page knowing what they are. A `GET` action is a link that opens in a new
+tab. Any other action is a button that sends `fetch` to the action's path on
+the origin the page came from, with the header `X-Attentiond: 1`. Using the
+path and not the whole URL means a `--public-url` that differs from the
+address in the address bar does not turn into a cross-origin request.
+Clicking Open focuses the Herdr pane, and Snooze or Bump changes the queue,
+without leaving the page. A failed action shows the daemon's `error` next to
+its button.
 
 ## What is kept, and where
 
