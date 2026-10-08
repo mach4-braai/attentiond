@@ -25,6 +25,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
 	"github.com/devanmcgeer/attentiond/internal/notify"
+	"github.com/devanmcgeer/attentiond/internal/runner"
 	"github.com/devanmcgeer/attentiond/internal/spend"
 )
 
@@ -116,12 +117,17 @@ func run() error {
 		actions[herdr.SourceName] = herdr.NewActions(herdrClient, cfg.Herdr.Fixture != "")
 	}
 
-	githubPoller, err := newGitHubPoller(ctx, cfg.GitHub, store, logger)
+	githubPoller, githubClient, err := newGitHubPoller(ctx, cfg.GitHub, store, logger)
 	if err != nil {
 		return err
 	}
 	if githubPoller != nil {
 		sources[github.SourceName] = githubPoller.SourceStatus
+	}
+
+	toolRunner, err := newRunner(cfg, statePath, store, githubClient, logger)
+	if err != nil {
+		return err
 	}
 
 	calendarPoller, err := newCalendarPoller(cfg.Calendar, store, logger)
@@ -166,6 +172,15 @@ func run() error {
 	if notifier != nil {
 		go notifier.Run(ctx)
 	}
+	runnerDone := make(chan struct{})
+	if toolRunner != nil {
+		go func() {
+			toolRunner.Run(ctx)
+			close(runnerDone)
+		}()
+	} else {
+		close(runnerDone)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Daemon.Addr,
@@ -188,6 +203,7 @@ func run() error {
 		"stale_after", staleWord(cfg.Attention.StaleAfter),
 		"snooze_for", cfg.Attention.SnoozeFor.String(),
 		"state_file", statePath,
+		"tools", toolRunner != nil,
 		"top_labels", strings.Join(cfg.Attention.TopLabels, ","))
 
 	errs := make(chan error, 1)
@@ -209,6 +225,9 @@ func run() error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	// A tool still running has had SIGTERM; the runner returns once it is
+	// gone, and its job stays running on disk for the next start.
+	<-runnerDone
 	logger.Info("attentiond stopped", "uptime", time.Since(started).Truncate(time.Second).String())
 	return nil
 }
@@ -256,19 +275,20 @@ func staleWord(after config.Duration) string {
 // newGitHubPoller returns nil when GitHub polling is off or no credential is
 // available. A missing token is not an error: the daemon is useful without it,
 // and a hard failure here would make `attentiond` unstartable on a machine that
-// never logged into gh.
-func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.Store, log *slog.Logger) (*github.Poller, error) {
+// never logged into gh. The client comes back too, for the tool runner's
+// comment reads.
+func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.Store, log *slog.Logger) (*github.Poller, *github.Client, error) {
 	if !cfg.Enabled {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	scope, err := github.NewScope(cfg.Repos, cfg.Orgs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	priority, err := github.NewPriorityRepos(cfg.PriorityRepos)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -276,14 +296,15 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 	token, origin, err := github.ResolveToken(lookup)
 	if err != nil {
 		log.Warn("github adapter disabled, no credential", "error", err)
-		return nil, nil
+		return nil, nil, nil
 	}
 	log.Info("github adapter enabled",
 		"credential", origin, "poll", cfg.Poll.String(), "scope", scope.String(),
 		"priority_repos", strings.Join(cfg.PriorityRepos, ","))
 
+	client := github.NewClient(cfg.API, token, 15*time.Second)
 	return github.NewPoller(
-		github.NewClient(cfg.API, token, 15*time.Second),
+		client,
 		store,
 		github.PollerConfig{
 			Interval: cfg.Poll.Std(),
@@ -294,7 +315,68 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 			},
 		},
 		log,
-	), nil
+	), client, nil
+}
+
+// newRunner returns nil when [tools] is off. Jobs a previous run left queued
+// or running are finished as failed then, so the item does not claim a tool
+// is working on it forever. A tools directory that is not there fails
+// startup: every run would fail, and only the job detail would say why.
+func newRunner(cfg config.Config, statePath string, store *attention.Store, client *github.Client, log *slog.Logger) (*runner.Runner, error) {
+	if !cfg.Tools.Enabled {
+		for _, job := range store.Jobs() {
+			if job.Pending() {
+				_, _ = store.FinishJob(job.Item, attention.ResultFailed, "tool runner is off")
+			}
+		}
+		return nil, nil
+	}
+	if info, err := os.Stat(cfg.Tools.Dir); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("tools.dir %q is not a directory", cfg.Tools.Dir)
+	}
+	logDir := cfg.Tools.LogDir
+	if logDir == "" {
+		if statePath == "" {
+			return nil, errors.New("tools.log_dir: no state directory to default to; set it")
+		}
+		logDir = filepath.Join(filepath.Dir(statePath), "runs")
+	}
+
+	timeouts := make(map[string]time.Duration, len(cfg.Tools.Timeouts))
+	for tool, timeout := range cfg.Tools.Timeouts {
+		timeouts[tool] = timeout.Std()
+	}
+
+	// No allowlist, or no GitHub to read from, means agent-comments never
+	// runs. The allowlist is bound here so the filter runs inside the client.
+	var comments runner.CommentSource
+	if client != nil && len(cfg.Tools.CommentAuthors) > 0 {
+		authors := cfg.Tools.CommentAuthors
+		comments = func(ctx context.Context, repo string, number int) ([]github.Comment, error) {
+			return client.Comments(ctx, repo, number, authors)
+		}
+	}
+
+	repos := make([]string, 0, len(cfg.Tools.Checkouts))
+	for repo := range cfg.Tools.Checkouts {
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	log.Info("tool runner enabled",
+		"dir", cfg.Tools.Dir, "log_dir", logDir, "checkouts", strings.Join(repos, ","),
+		"comment_authors", strings.Join(cfg.Tools.CommentAuthors, ","),
+		"comment_quiet", cfg.Tools.CommentQuiet.String(), "rebase_behind", cfg.Tools.RebaseBehind)
+
+	return runner.New(store, runner.Config{
+		Dir:          cfg.Tools.Dir,
+		LogDir:       logDir,
+		Checkouts:    cfg.Tools.Checkouts,
+		Timeouts:     timeouts,
+		CommentQuiet: cfg.Tools.CommentQuiet.Std(),
+		RebaseBehind: cfg.Tools.RebaseBehind,
+		CommentPoll:  cfg.GitHub.Poll.Std(),
+		WaitDelay:    10 * time.Second,
+	}, comments, log), nil
 }
 
 // newCalendarPoller returns nil when the calendar source is off or has no
