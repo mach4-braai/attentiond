@@ -83,7 +83,9 @@ type Store struct {
 	// kept apart from decisions so a watched item can still be snoozed.
 	watches map[string]Watch
 	// jobs is item id to the latest tool run on it.
-	jobs       map[string]Job
+	jobs map[string]Job
+	// handled is item id to the comment ids a tool has already been given.
+	handled    map[string]map[string]bool
 	generation uint64
 	writeMu    sync.Mutex
 	written    uint64
@@ -112,11 +114,19 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 		log.Info("decisions restored", "path", cfg.DecisionPath,
 			"count", len(saved.decisions), "watches", len(saved.watches), "jobs", len(saved.jobs))
 	}
+	handled := make(map[string]map[string]bool, len(saved.handled))
+	for item, ids := range saved.handled {
+		handled[item] = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			handled[item][id] = true
+		}
+	}
 	return &Store{
 		items:     make(map[string]Item),
 		decisions: saved.decisions,
 		watches:   saved.watches,
 		jobs:      saved.jobs,
+		handled:   handled,
 		cfg:       cfg,
 		log:       log,
 		now:       now,
@@ -348,6 +358,7 @@ func (s *Store) Unwatch(key string) (Item, error) {
 		return Item{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
 	}
 	delete(s.watches, key)
+	delete(s.handled, key)
 	s.apply(&item, s.now())
 	generation, snapshot := s.stage()
 	s.mu.Unlock()
@@ -458,6 +469,37 @@ func (s *Store) changeJob(key string, needItem bool, change func(job *Job, now t
 	return job, nil
 }
 
+// HandledComments reports which comment ids a tool has already been given for
+// an item. The set is a copy.
+func (s *Store) HandledComments(key string) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.handled[key]))
+	for id := range s.handled[key] {
+		out[id] = true
+	}
+	return out
+}
+
+// MarkCommentsHandled adds comment ids to an item's cursor and writes it to
+// disk, so a restart does not give the same comments to a tool again.
+func (s *Store) MarkCommentsHandled(key string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.handled[key] == nil {
+		s.handled[key] = make(map[string]bool, len(ids))
+	}
+	for _, id := range ids {
+		s.handled[key][id] = true
+	}
+	generation, snapshot := s.stage()
+	s.mu.Unlock()
+
+	s.persist(generation, snapshot)
+}
+
 // Jobs returns every job the store holds, newest first, for the runner to
 // pick up what a restart interrupted.
 func (s *Store) Jobs() []Job {
@@ -509,6 +551,7 @@ func (s *Store) stage() (uint64, state) {
 		decisions: make(map[string]Decision, len(s.decisions)),
 		watches:   make(map[string]Watch, len(s.watches)),
 		jobs:      make(map[string]Job, len(s.jobs)),
+		handled:   make(map[string][]string, len(s.handled)),
 	}
 	for key, decision := range s.decisions {
 		saved.decisions[key] = decision
@@ -518,6 +561,14 @@ func (s *Store) stage() (uint64, state) {
 	}
 	for key, job := range s.jobs {
 		saved.jobs[key] = job
+	}
+	for key, ids := range s.handled {
+		list := make([]string, 0, len(ids))
+		for id := range ids {
+			list = append(list, id)
+		}
+		sort.Strings(list)
+		saved.handled[key] = list
 	}
 	return s.generation, saved
 }

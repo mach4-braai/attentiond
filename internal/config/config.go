@@ -45,6 +45,35 @@ type Config struct {
 	GitHub    GitHub    `toml:"github"`
 	Calendar  Calendar  `toml:"calendar"`
 	Spend     Spend     `toml:"spend"`
+	Tools     Tools     `toml:"tools"`
+}
+
+// Tools is the runner that acts on watched pull requests by starting the
+// scripts in Dir. It does nothing unless Enabled.
+type Tools struct {
+	Enabled bool `toml:"enabled"`
+	// Dir holds rebase.sh, agent-rebase.sh and agent-comments.sh. A relative
+	// path is resolved against the directory of this file, so the same
+	// config works from `go run` and from an installed binary.
+	Dir string `toml:"dir"`
+	// LogDir is where each run's output goes. Empty is a runs directory
+	// beside the state file.
+	LogDir string `toml:"log_dir"`
+	// Checkouts maps owner/name to the local clone the tools work in. A
+	// leading ~ is your home directory.
+	Checkouts map[string]string `toml:"checkouts"`
+	// Timeouts bound each tool's run. A tool left out keeps its default.
+	Timeouts map[string]Duration `toml:"timeouts"`
+	// CommentAuthors are the logins whose comments agent-comments acts on.
+	// Empty means it never runs.
+	CommentAuthors []string `toml:"comment_authors"`
+	// CommentQuiet is how long the newest comment has to sit before
+	// agent-comments starts, so one review starts one run.
+	CommentQuiet Duration `toml:"comment_quiet"`
+	// RebaseBehind also rebases a pull request that is only behind its base.
+	// Off by default: every rebase force-pushes, restarts CI and may dismiss
+	// approvals.
+	RebaseBehind bool `toml:"rebase_behind"`
 }
 
 // Attention tunes the queue itself rather than any one source.
@@ -248,6 +277,23 @@ func Default() Config {
 			LookupsPerNote: 20,
 			MinLookups:     100,
 		},
+		Tools: Tools{
+			// Off: it starts scripts that push to your branches, and it has
+			// nothing to work in until checkouts names a clone.
+			Enabled:      false,
+			Timeouts:     defaultTimeouts(),
+			CommentQuiet: Duration(2 * time.Minute),
+		},
+	}
+}
+
+// defaultTimeouts bounds each tool. A plain rebase is a fetch and a push; the
+// agent tools run a model over a whole branch.
+func defaultTimeouts() map[string]Duration {
+	return map[string]Duration{
+		"rebase":         Duration(10 * time.Minute),
+		"agent-rebase":   Duration(45 * time.Minute),
+		"agent-comments": Duration(45 * time.Minute),
 	}
 }
 
@@ -335,7 +381,83 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		return Default(), false, fmt.Errorf("%s: spend limits: want zero (off) or a positive number", path)
 	}
 
+	if err := resolveTools(filepath.Dir(path), &cfg.Tools); err != nil {
+		return Default(), false, fmt.Errorf("%s: %w", path, err)
+	}
+
 	return cfg, true, nil
+}
+
+// resolveTools turns the paths in [tools] into absolute ones and checks what
+// the runner cannot work without. Relative paths are taken from base, the
+// directory of the config file.
+func resolveTools(base string, tools *Tools) error {
+	defaults := defaultTimeouts()
+	for tool, timeout := range tools.Timeouts {
+		if _, known := defaults[tool]; !known {
+			return fmt.Errorf("tools.timeouts: unknown tool %q", tool)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf("tools.timeouts.%s %s: want a period", tool, timeout)
+		}
+	}
+	if tools.Timeouts == nil {
+		tools.Timeouts = make(map[string]Duration, len(defaults))
+	}
+	for tool, timeout := range defaults {
+		if _, set := tools.Timeouts[tool]; !set {
+			tools.Timeouts[tool] = timeout
+		}
+	}
+	if tools.CommentQuiet < 0 {
+		return fmt.Errorf("tools.comment_quiet %s: want zero or a period", tools.CommentQuiet)
+	}
+
+	var err error
+	if tools.Dir, err = absolute(base, tools.Dir); err != nil {
+		return fmt.Errorf("tools.dir: %w", err)
+	}
+	if tools.LogDir, err = absolute(base, tools.LogDir); err != nil {
+		return fmt.Errorf("tools.log_dir: %w", err)
+	}
+	checkouts := make(map[string]string, len(tools.Checkouts))
+	for repo, dir := range tools.Checkouts {
+		owner, name, ok := strings.Cut(repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("tools.checkouts: %q is not owner/name", repo)
+		}
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("tools.checkouts.%q: want a path", repo)
+		}
+		if checkouts[strings.ToLower(repo)], err = absolute(base, dir); err != nil {
+			return fmt.Errorf("tools.checkouts.%q: %w", repo, err)
+		}
+	}
+	tools.Checkouts = checkouts
+
+	if tools.Enabled && tools.Dir == "" {
+		return errors.New("tools.dir: want the directory holding the tool scripts")
+	}
+	return nil
+}
+
+// absolute expands a leading ~ and resolves a relative path against base. An
+// empty path stays empty.
+func absolute(base, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	switch {
+	case path == "":
+		return "", nil
+	case path == "~" || strings.HasPrefix(path, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+	case !filepath.IsAbs(path):
+		path = filepath.Join(base, path)
+	}
+	return filepath.Abs(path)
 }
 
 func plural(word string, n int) string {
