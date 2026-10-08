@@ -81,7 +81,9 @@ type Store struct {
 	decisions map[string]Decision
 	// watches is item id to a human's request that attentiond act on it,
 	// kept apart from decisions so a watched item can still be snoozed.
-	watches    map[string]Watch
+	watches map[string]Watch
+	// jobs is item id to the latest tool run on it.
+	jobs       map[string]Job
 	generation uint64
 	writeMu    sync.Mutex
 	written    uint64
@@ -90,8 +92,8 @@ type Store struct {
 	now        func() time.Time
 }
 
-// NewStore returns a store holding the decisions and watches an earlier run
-// left behind.
+// NewStore returns a store holding the decisions, watches and jobs an earlier
+// run left behind.
 //
 // A decisions file that cannot be read costs a warning rather than the daemon.
 // The file is machine-written, the worst case is a few snoozes to make again,
@@ -106,14 +108,15 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 	if err != nil {
 		log.Warn("decisions not restored", "path", cfg.DecisionPath, "error", err)
 		saved = emptyState()
-	} else if len(saved.decisions) > 0 || len(saved.watches) > 0 {
+	} else if len(saved.decisions) > 0 || len(saved.watches) > 0 || len(saved.jobs) > 0 {
 		log.Info("decisions restored", "path", cfg.DecisionPath,
-			"count", len(saved.decisions), "watches", len(saved.watches))
+			"count", len(saved.decisions), "watches", len(saved.watches), "jobs", len(saved.jobs))
 	}
 	return &Store{
 		items:     make(map[string]Item),
 		decisions: saved.decisions,
 		watches:   saved.watches,
+		jobs:      saved.jobs,
 		cfg:       cfg,
 		log:       log,
 		now:       now,
@@ -267,7 +270,11 @@ func (s *Store) Decide(key string, kind DecisionKind, until time.Time) (Item, er
 		return Item{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
 	}
 
-	label, _ := item.Display()
+	// The label a decision is made against is the one the human is looking
+	// at, which a job may have replaced.
+	shown := item
+	s.overlay(&shown)
+	label, _ := shown.Display()
 	now := s.now()
 	decision := Decision{Item: key, Kind: kind, Label: label, MadeAt: now}
 	if kind == DecisionSnooze && !until.IsZero() {
@@ -287,7 +294,8 @@ func (s *Store) Decide(key string, kind DecisionKind, until time.Time) (Item, er
 }
 
 // Clear drops the decision on one item, which is how a snooze is woken early
-// and a bump is taken back.
+// and a bump is taken back. It also dismisses a finished job; a pending one
+// stays, because its tool is still going to report.
 func (s *Store) Clear(key string) (Item, error) {
 	s.mu.Lock()
 	item, ok := s.items[key]
@@ -296,6 +304,9 @@ func (s *Store) Clear(key string) (Item, error) {
 		return Item{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
 	}
 	delete(s.decisions, key)
+	if job, ok := s.jobs[key]; ok && !job.Pending() {
+		delete(s.jobs, key)
+	}
 	s.apply(&item, s.now())
 	generation, snapshot := s.stage()
 	s.mu.Unlock()
@@ -369,6 +380,115 @@ func (s *Store) Decisions() []Decision {
 	return out
 }
 
+// QueueJob records that a tool is waiting to run on an item, replacing the
+// job the item had. The item has to exist: a tool runs on something a source
+// reported.
+func (s *Store) QueueJob(key, tool string) (Job, error) {
+	return s.changeJob(key, true, func(job *Job, now time.Time) error {
+		*job = Job{Item: key, Tool: tool, Status: JobQueued, QueuedAt: now}
+		return nil
+	})
+}
+
+// StartJob records that the queued job on an item is running, writing its
+// output to log.
+func (s *Store) StartJob(key, log string) (Job, error) {
+	return s.changeJob(key, false, func(job *Job, now time.Time) error {
+		if job.Status != JobQueued {
+			return fmt.Errorf("%w: %s has no queued job", ErrJobMissing, key)
+		}
+		job.Status, job.Log, job.StartedAt = JobRunning, log, &now
+		return nil
+	})
+}
+
+// FinishJob records what the pending job on an item returned. The item may
+// have left its source while the tool ran; the result is kept all the same.
+func (s *Store) FinishJob(key, result, detail string) (Job, error) {
+	return s.changeJob(key, false, func(job *Job, now time.Time) error {
+		if !job.Pending() {
+			return fmt.Errorf("%w: %s has no pending job", ErrJobMissing, key)
+		}
+		job.Status, job.Result, job.Detail, job.FinishedAt = JobFinished, result, detail, &now
+		return nil
+	})
+}
+
+// changeJob applies one job change, then records and observes the transition
+// it makes to how the item reads. A tool finishing happens between polls, so
+// waiting for the next poll to notice would hold back the notification.
+func (s *Store) changeJob(key string, needItem bool, change func(job *Job, now time.Time) error) (Job, error) {
+	s.mu.Lock()
+	item, exists := s.items[key]
+	if needItem && !exists {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("%w: %s", ErrItemMissing, key)
+	}
+	before, had := s.jobs[key]
+	job := before
+	if err := change(&job, s.now()); err != nil {
+		s.mu.Unlock()
+		return Job{}, err
+	}
+	s.jobs[key] = job
+
+	var transitions []Transition
+	if exists {
+		prev, next := item, item
+		if had {
+			overlayJob(&prev, before)
+			s.promote(&prev)
+		}
+		s.overlay(&next)
+		if prev.State != next.State || transitionWord(prev) != transitionWord(next) {
+			s.log.Info("state transition",
+				"item_id", key, "source", item.Source,
+				"from", transitionWord(prev), "to", transitionWord(next),
+				"severity", string(next.Severity), "title", item.Title)
+			transitions = s.transition(transitions, prev, true, next)
+		}
+	}
+	generation, snapshot := s.stage()
+	s.mu.Unlock()
+
+	s.log.Info("job "+string(job.Status),
+		"item_id", key, "tool", job.Tool, "result", job.Result, "detail", job.Detail, "log", job.Log)
+	s.persist(generation, snapshot)
+	s.observe(transitions)
+	return job, nil
+}
+
+// Jobs returns every job the store holds, newest first, for the runner to
+// pick up what a restart interrupted.
+func (s *Store) Jobs() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		out = append(out, job)
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if !out[a].QueuedAt.Equal(out[b].QueuedAt) {
+			return out[a].QueuedAt.After(out[b].QueuedAt)
+		}
+		return out[a].Item < out[b].Item
+	})
+	return out
+}
+
+// JobItems returns the items that carry a job, newest job first. Stale items
+// are included: a tool that finished on a quiet pull request still reported.
+func (s *Store) JobItems() []Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweep()
+	out := s.collect(func(item Item) bool { return item.Job != nil })
+	sort.SliceStable(out, func(a, b int) bool {
+		return out[a].Job.QueuedAt.After(out[b].Job.QueuedAt)
+	})
+	return out
+}
+
 // see moves a watched item's SeenAt forward, and reports whether that is worth
 // a write. It assumes the lock is held.
 func (s *Store) see(id string, now time.Time) bool {
@@ -388,12 +508,16 @@ func (s *Store) stage() (uint64, state) {
 	saved := state{
 		decisions: make(map[string]Decision, len(s.decisions)),
 		watches:   make(map[string]Watch, len(s.watches)),
+		jobs:      make(map[string]Job, len(s.jobs)),
 	}
 	for key, decision := range s.decisions {
 		saved.decisions[key] = decision
 	}
 	for key, watch := range s.watches {
 		saved.watches[key] = watch
+	}
+	for key, job := range s.jobs {
+		saved.jobs[key] = job
 	}
 	return s.generation, saved
 }
@@ -510,6 +634,10 @@ func (s *Store) promote(item *Item) {
 // the file is written when somebody makes or clears a decision, and a lapsed
 // one left in it is pruned on the next load or on the first poll after it.
 func (s *Store) apply(item *Item, now time.Time) {
+	// The job goes first, so a snooze is judged against the label the human
+	// sees. A tool that gives up changes that label, which ends the snooze.
+	s.overlay(item)
+
 	if decision, ok := s.decisions[item.ID]; ok {
 		label, _ := item.Display()
 		switch {
@@ -540,6 +668,16 @@ func (s *Store) apply(item *Item, now time.Time) {
 	}
 }
 
+// overlay writes an item's job onto a copy of it. It assumes the lock is held.
+func (s *Store) overlay(item *Item) {
+	job, ok := s.jobs[item.ID]
+	if !ok {
+		return
+	}
+	overlayJob(item, job)
+	s.promote(item)
+}
+
 // untilWord is how a snooze deadline reads in a log line. An open-ended snooze
 // has no deadline to print, and "0001-01-01" is not what it means.
 func untilWord(until *time.Time) string {
@@ -566,7 +704,7 @@ func changed(prev, next Item) bool {
 // covers it, so the notifier can stay quiet about work a human already
 // deferred. Only the copy: applying a decision to the stored item would
 // overwrite the priority a source computed, and a snooze that lapses could
-// never give it back.
+// never give it back. Both copies carry the item's job for the same reason.
 func (s *Store) record(transitions []Transition, prev Item, existed bool, next Item) []Transition {
 	switch {
 	case !existed:
@@ -581,6 +719,16 @@ func (s *Store) record(transitions []Transition, prev Item, existed bool, next I
 	default:
 		return transitions
 	}
+	if existed {
+		s.overlay(&prev)
+	}
+	s.overlay(&next)
+	return s.transition(transitions, prev, existed, next)
+}
+
+// transition appends one change, marking the copy snoozed when a live snooze
+// covers how it now reads. It assumes the lock is held.
+func (s *Store) transition(transitions []Transition, prev Item, existed bool, next Item) []Transition {
 	if decision, ok := s.decisions[next.ID]; ok && decision.Kind == DecisionSnooze {
 		if !decision.spent(s.now(), transitionWord(next)) {
 			next.Snoozed = true
