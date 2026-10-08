@@ -1,0 +1,20 @@
+# Headless omp refuses unlisted bash commands. The wrapper alone pushes.
+tools:
+  approvalMode: write
+bash:
+  allowCompoundCommands: true
+  patterns:
+    - { match: "git push*", approval: deny }
+    - { match: "git rebase*", approval: deny }
+    - { match: "git reset*", approval: deny }
+    - { match: "git checkout*", approval: deny }
+    - { match: "git switch*", approval: deny }
+    - { match: "git commit --amend*", approval: deny }
+    - { match: "git commit -m *", approval: allow }
+    - { match: "git add *", approval: allow }
+    - { match: "git status*", approval: allow }
+    - { match: "git diff*", approval: allow }
+    - { match: "git log*", approval: allow }
+    - { match: "git show *", approval: allow }
+    - { match: "git rev-parse *", approval: allow }
+    - { match: "git merge-base --is-ancestor *", approval: allow }
