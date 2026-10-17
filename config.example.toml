@@ -201,3 +201,36 @@ min_lookups = 100          # below this many lookups the ratio is not judged
 # Entries older than this are dropped by a rewrite at most once an hour. Zero
 # keeps everything.
 retention = "720h"
+
+[datadog]
+# Container vulnerability findings from Datadog, each one an item labelled
+# "vulnerability". attentiond only reads: it never changes a finding in Datadog.
+# Off by default: it reaches the network and needs two keys.
+enabled = false
+
+# Your Datadog site. The API host is api.<site>, so the EU1 default reads
+# https://api.datadoghq.eu.
+site = "datadoghq.eu"
+
+# Findings change slowly and the search is heavy, so this is not a fast poll.
+poll = "30m"
+
+# Datadog findings search. Narrow it with more facets, for example
+# "@container_image.name:*web-api*" or "@severity:(critical OR high)".
+query = "@finding_type:host_and_container_vulnerability @status:open"
+
+# Findings per request, 1 to 1000. Pages are followed until Datadog stops
+# returning a cursor, so this is request size, not a cap.
+page_limit = 100
+
+# The environment variables holding the keys. Never put a key in this file. The
+# application key needs the security_monitoring_findings_read or appsec_vm_read
+# permission. With either variable empty the source stays off and startup says
+# which one is missing.
+api_key_env = "DD_API_KEY"
+app_key_env = "DD_APP_KEY"
+
+# Replay a recorded response instead of calling the API. Read on every poll and
+# needs no keys:
+#   fixture = "testdata/datadog-findings.json"
+# fixture = ""

@@ -46,6 +46,7 @@ type Config struct {
 	Calendar  Calendar  `toml:"calendar"`
 	Spend     Spend     `toml:"spend"`
 	Log       Log       `toml:"log"`
+	Datadog   Datadog   `toml:"datadog"`
 }
 
 // Log is the signal log: one JSON line for every item that appears, changes
@@ -142,6 +143,25 @@ type GitHub struct {
 	// the infrastructure is not the same errand as one in a side project, and
 	// severity cannot say so: both are warnings.
 	PriorityRepos []string `toml:"priority_repos"`
+}
+
+// Datadog is the container vulnerability source. It reads the findings
+// endpoint with an API key and an application key, each named by an
+// environment variable so neither lands in a file.
+type Datadog struct {
+	Enabled bool `toml:"enabled"`
+	// Site is the Datadog site, such as datadoghq.eu. The API host is
+	// api.<site>.
+	Site  string   `toml:"site"`
+	Poll  Duration `toml:"poll"`
+	Query string   `toml:"query"`
+	// PageLimit is findings per request. Datadog allows at most 1000.
+	PageLimit int    `toml:"page_limit"`
+	APIKeyEnv string `toml:"api_key_env"`
+	AppKeyEnv string `toml:"app_key_env"`
+	// Fixture replays a recorded response instead of calling the API, and
+	// needs no keys.
+	Fixture string `toml:"fixture"`
 }
 
 // Calendar is the meetings source. It reads iCalendar feeds, one per
@@ -260,6 +280,16 @@ func Default() Config {
 			MinLookups:     100,
 		},
 		Log: Log{Retention: Duration(720 * time.Hour)},
+		Datadog: Datadog{
+			// Off: it reaches the network and needs two keys.
+			Enabled:   false,
+			Site:      "datadoghq.eu",
+			Poll:      Duration(30 * time.Minute),
+			Query:     "@finding_type:host_and_container_vulnerability @status:open",
+			PageLimit: 100,
+			APIKeyEnv: "DD_API_KEY",
+			AppKeyEnv: "DD_APP_KEY",
+		},
 	}
 }
 
@@ -346,6 +376,18 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 	}
 	if cfg.Spend.AdvisorCost < 0 || cfg.Spend.LookupsPerNote < 0 || cfg.Spend.MinLookups < 0 {
 		return Default(), false, fmt.Errorf("%s: spend limits: want zero (off) or a positive number", path)
+	}
+	if cfg.Datadog.Enabled {
+		if cfg.Datadog.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: datadog.poll %s: want a period", path, cfg.Datadog.Poll)
+		}
+		if cfg.Datadog.PageLimit < 1 || cfg.Datadog.PageLimit > 1000 {
+			return Default(), false, fmt.Errorf("%s: datadog.page_limit %d: want 1 to 1000",
+				path, cfg.Datadog.PageLimit)
+		}
+		if strings.TrimSpace(cfg.Datadog.Site) == "" && cfg.Datadog.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: datadog.site: want a site such as datadoghq.eu", path)
+		}
 	}
 
 	return cfg, true, nil

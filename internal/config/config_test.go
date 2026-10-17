@@ -240,3 +240,31 @@ func TestSignalLogKeepsThirtyDaysUntilAFileSaysOtherwise(t *testing.T) {
 		t.Fatal("a negative retention was accepted")
 	}
 }
+
+func TestDatadogDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := cfg.Datadog
+	if d.Enabled || d.Site != "datadoghq.eu" || d.Poll.Std() != 30*time.Minute ||
+		d.Query != "@finding_type:host_and_container_vulnerability @status:open" ||
+		d.PageLimit != 100 || d.APIKeyEnv != "DD_API_KEY" || d.AppKeyEnv != "DD_APP_KEY" || d.Fixture != "" {
+		t.Errorf("datadog defaults = %+v", d)
+	}
+
+	for body, want := range map[string]string{
+		"[datadog]\nenabled = true\npage_limit = 0\n":    "datadog.page_limit",
+		"[datadog]\nenabled = true\npage_limit = 1001\n": "datadog.page_limit",
+		"[datadog]\nenabled = true\npoll = \"0s\"\n":     "datadog.poll",
+		"[datadog]\nenabled = true\nsite = \"\"\n":       "datadog.site",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[datadog]\nenabled = true\nsite = \"\"\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no site: %v", err)
+	}
+}
