@@ -454,6 +454,54 @@ changes, so a label carrying a dollar figure would wake every poll.
 
 Open focuses the session's Herdr pane, the same action the Herdr item carries.
 
+## Datadog
+
+`[datadog]` turns container vulnerability findings into items. Every thirty
+minutes it asks `GET https://api.<site>/api/v2/security/findings` for the
+findings matching `query`, follows `meta.page.after` until Datadog stops
+returning a cursor, and replaces the whole source with the result. It only
+reads. Nothing is written back to Datadog.
+
+It is off by default. The keys come from the environment, from the variables
+`api_key_env` and `app_key_env` name (`DD_API_KEY` and `DD_APP_KEY`). The
+application key needs `security_monitoring_findings_read` or `appsec_vm_read`.
+With either one missing the source stays off and startup names the variable.
+The keys are never logged, and they are scrubbed from every error.
+
+Every finding is one item: `source` is `datadog`, the id is
+`datadog:<finding id>`, `title` is the finding's title, `label` is
+`vulnerability` and `state` is `needs_attention`. Priority is the default for
+that state. Severity follows Datadog's: critical and high are `critical`,
+medium is `warning`, anything else is `info`. The item has no actions.
+
+| `context` key | Datadog field |
+| --- | --- |
+| `finding_id` | `finding_id` |
+| `finding_type` | `finding_type` |
+| `severity` | `severity`, as Datadog spells it |
+| `image` | `container_image.name` |
+| `repo_digest` | first of `container_image.repo_digests` |
+| `package`, `package_version` | `package.name`, `package.version` |
+| `fix_available` | `remediation.is_available`, `true` or `false` |
+| `fixed_version` | first `remediation.package.base` version, else first `remediation.package.closest_no_vulnerabilities` version |
+| `inherited_from_base_image` | `vulnerability.is_inherited_from_base_image`, `true` or `false` |
+| `ecosystem` | `vulnerability.stack.ecosystem` |
+| `status` | `status` |
+| `first_seen_at` | `first_seen_at`, converted from epoch milliseconds to RFC 3339 |
+
+A key is left out when Datadog did not send the field, so an absent
+`fix_available` means Datadog did not say, not that there is no fix. An item's
+`updated_at` is `first_seen_at`, so `stale_after` measures how long a
+vulnerability has been open.
+
+Like GitHub, a failed poll keeps the last good result and sets the error in
+`/health`. When Datadog reports `meta.status` as `timeout` the findings are a
+prefix of the match, and `/health` carries a warning saying so.
+
+To work without keys, point `fixture` at a recorded response.
+`testdata/datadog-findings.json` is one: four findings across two images. The
+file is read on every poll.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and
