@@ -1,0 +1,49 @@
+package main
+
+import (
+	"bytes"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/config"
+)
+
+func TestDatadogSourceIsOffWithoutKeysAndWarnsByName(t *testing.T) {
+	t.Setenv("TEST_DD_API_KEY", "")
+	t.Setenv("TEST_DD_APP_KEY", "never-logged")
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store := attention.NewStore(log, attention.StoreConfig{})
+
+	cfg := config.Default().Datadog
+	cfg.Enabled = true
+	cfg.APIKeyEnv = "TEST_DD_API_KEY"
+	cfg.AppKeyEnv = "TEST_DD_APP_KEY"
+
+	poller, err := newDatadogPoller(cfg, store, log)
+	if err != nil || poller != nil {
+		t.Fatalf("poller = %v, err = %v, want a disabled source and no error", poller, err)
+	}
+	if !strings.Contains(logs.String(), "TEST_DD_API_KEY") {
+		t.Errorf("warning does not name the missing variable: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "never-logged") {
+		t.Errorf("a key value reached the log: %s", logs.String())
+	}
+
+	// A fixture needs no keys at all.
+	t.Setenv("TEST_DD_APP_KEY", "")
+	cfg.Fixture = "../../testdata/datadog-findings.json"
+	poller, err = newDatadogPoller(cfg, store, log)
+	if err != nil || poller == nil {
+		t.Fatalf("fixture poller = %v, err = %v, want a poller without keys", poller, err)
+	}
+
+	cfg.Enabled = false
+	if poller, _ := newDatadogPoller(cfg, store, log); poller != nil {
+		t.Error("a disabled source built a poller")
+	}
+}

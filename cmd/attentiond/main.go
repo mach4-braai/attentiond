@@ -20,6 +20,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/attention"
 	"github.com/devanmcgeer/attentiond/internal/calendar"
 	"github.com/devanmcgeer/attentiond/internal/config"
+	"github.com/devanmcgeer/attentiond/internal/datadog"
 	"github.com/devanmcgeer/attentiond/internal/desktop"
 	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
@@ -146,6 +147,14 @@ func run() error {
 		sources[spend.SourceName] = spendPoller.SourceStatus
 	}
 
+	datadogPoller, err := newDatadogPoller(cfg.Datadog, store, logger)
+	if err != nil {
+		return err
+	}
+	if datadogPoller != nil {
+		sources[datadog.SourceName] = datadogPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:     store,
 		Sources:   sources,
@@ -168,6 +177,9 @@ func run() error {
 	}
 	if spendPoller != nil {
 		go spendPoller.Run(ctx)
+	}
+	if datadogPoller != nil {
+		go datadogPoller.Run(ctx)
 	}
 	if notifier != nil {
 		go notifier.Run(ctx)
@@ -303,6 +315,39 @@ func newGitHubPoller(ctx context.Context, cfg config.GitHub, store *attention.St
 		},
 		log,
 	), nil
+}
+
+// newDatadogPoller returns nil when the Datadog source is off or its keys are
+// missing. Like GitHub, a missing credential is not an error: the daemon is
+// useful without it. A fixture needs no keys, so it is never looked for.
+func newDatadogPoller(cfg config.Datadog, store *attention.Store, log *slog.Logger) (*datadog.Poller, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+
+	pollerCfg := datadog.PollerConfig{
+		Interval:  cfg.Poll.Std(),
+		Query:     cfg.Query,
+		PageLimit: cfg.PageLimit,
+		Fixture:   cfg.Fixture,
+	}
+	if cfg.Fixture != "" {
+		log.Info("datadog adapter enabled", "fixture", cfg.Fixture, "poll", cfg.Poll.String())
+		return datadog.NewPoller(nil, store, pollerCfg, log), nil
+	}
+
+	apiKey, appKey, err := datadog.ResolveKeys(cfg.APIKeyEnv, cfg.AppKeyEnv)
+	if err != nil {
+		log.Warn("datadog adapter disabled, no credential", "error", err)
+		return nil, nil
+	}
+	log.Info("datadog adapter enabled",
+		"site", cfg.Site, "credential", cfg.APIKeyEnv+" and "+cfg.AppKeyEnv,
+		"poll", cfg.Poll.String(), "query", cfg.Query)
+
+	return datadog.NewPoller(
+		datadog.NewClient(datadog.BaseURL(cfg.Site), apiKey, appKey, 30*time.Second),
+		store, pollerCfg, log), nil
 }
 
 // newCalendarPoller returns nil when the calendar source is off or has no
