@@ -189,12 +189,9 @@ func saveState(path string, saved state) error {
 // DefaultDecisionPath is where decisions live when the file does not name a
 // path: beside the pid and the log that attn-daemon already writes.
 func DefaultDecisionPath() string {
-	if dir := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); dir != "" {
-		return filepath.Join(dir, "attentiond", "decisions.json")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	dir := stateDir()
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(home, ".local", "state", "attentiond", "decisions.json")
+	return filepath.Join(dir, "decisions.json")
 }
