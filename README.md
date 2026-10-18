@@ -98,6 +98,10 @@ sync = ["omp", "stats", "--summary"]   # indexes new turns before each read; [] 
 advisor_cost = 25              # dollars per advisor transcript; 0 is off
 lookups_per_note = 20          # advisor read/grep/glob calls per advise call; 0 is off
 min_lookups = 100              # lookups before the ratio counts
+
+[log]
+# path = ""                    # default $XDG_STATE_HOME/attentiond/signals.jsonl
+retention = "720h"             # entries older than this are pruned hourly; 0 keeps all
 ```
 
 A file only has to say what it changes; anything absent keeps its default. A
@@ -324,6 +328,49 @@ Decisions are written to `[daemon] state_file` as they are made and reloaded at
 startup, expired snoozes dropped. Items are not persisted; every source rebuilds
 those within a poll, and no source can rebuild a decision you made. A file that
 cannot be read costs a warning rather than the daemon.
+
+### `GET /api/log`
+
+The signal log, newest first. Both parameters are optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `since` | RFC 3339 time. Entries at or after it. |
+| `limit` | Positive whole number. Default 200, capped at 1000. |
+
+```bash
+curl -sS 'localhost:7717/api/log?since=2026-09-12T10:00:00Z&limit=50'
+```
+
+```json
+{
+  "generated_at": "2026-09-12T10:05:00Z",
+  "count": 1,
+  "entries": [
+    {
+      "at": "2026-09-12T10:04:11.52Z",
+      "kind": "changed",
+      "item_id": "github:example-org/infra#42",
+      "source": "github",
+      "title": "Fix the plan",
+      "state": "needs_attention",
+      "label": "ready to merge",
+      "severity": "warning",
+      "prev_state": "needs_attention",
+      "prev_label": "review requested"
+    }
+  ]
+}
+```
+
+Each entry has `at`, `kind`, `item_id`, `source`, `title`, `state`, `label` and
+`severity`. A `changed` entry adds `prev_state` and `prev_label`, plus
+`prev_severity` and `prev_title` when those differ. `appeared` and
+`disappeared` entries carry no `prev_*` fields.
+
+A `since` or `limit` that does not parse answers `400` with `{"error": "..."}`.
+With no log file yet, `entries` is an empty array. See
+[The signal log](#the-signal-log) for what an entry means.
 
 ### `GET /health`
 
@@ -603,3 +650,45 @@ state here that no source can reproduce: GitHub knows whether a pull request is
 mergeable, and nothing but this file knows you decided to leave it until
 Monday. See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning
 and for the rest of the MVP design.
+
+The signal log is a second file, `[log] path`, and is the record of what
+happened rather than the state of what is. It survives restarts and is trimmed
+by `[log] retention`. See [The signal log](#the-signal-log).
+
+## The signal log
+
+attentiond appends one JSON line to a file whenever an item appears, moves to a
+new state or label, or disappears. Each line is a self-contained object:
+
+```json
+{"at":"2026-09-12T10:04:11.52Z","kind":"changed","item_id":"github:example-org/infra#42","source":"github","title":"Fix the plan","state":"needs_attention","label":"ready to merge","severity":"warning","prev_state":"needs_attention","prev_label":"review requested"}
+```
+
+`kind` is `appeared`, `changed` or `disappeared`. `state`, `label` and
+`severity` describe the item after the change, or the last thing attentiond
+knew when it disappeared. `prev_state` and `prev_label` appear only on
+`changed`. `prev_severity` and `prev_title` appear only on `changed`, and only
+when that field differs. A change is a move in `state`, `label`, `title` or
+`severity`, so a severity escalation or a title edit alone writes an entry.
+An item disappears when its source stops reporting it or an
+event item passes `[events] ttl`.
+
+The file is `[log] path`, default `$XDG_STATE_HOME/attentiond/signals.jsonl`
+(`~/.local/state/attentiond/signals.jsonl` when that is unset). The slog text
+log is unchanged and still carries the same changes.
+
+`[log] retention` defaults to `720h`. When an entry is appended and the last
+prune was an hour ago or more, attentiond rewrites the file without entries
+older than that, through a temporary file and a rename. It skips the rewrite
+when nothing is old enough to drop. Zero keeps everything. A line that does
+not parse, such as one torn by a crash, is skipped when reading and dropped by
+the next rewrite.
+
+A restart does not repeat what the log already says. When a source first
+reports an item after a start, attentiond compares it with the item's newest
+entry. The same state and label logs nothing, a different one logs `changed`
+from that entry, and no entry or a `disappeared` entry logs `appeared`. An
+item in the log that a source never reports again is left alone, because the
+source may only be slow.
+
+A failed write is logged as a warning and dropped. The daemon keeps running.

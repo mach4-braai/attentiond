@@ -221,3 +221,22 @@ func TestGitHubIsOffUntilAFileTurnsItOn(t *testing.T) {
 		t.Errorf("github = %+v", cfg.GitHub)
 	}
 }
+
+func TestSignalLogKeepsThirtyDaysUntilAFileSaysOtherwise(t *testing.T) {
+	log := Default().Log
+	if log.Path != "" || log.Retention.Std() != 720*time.Hour {
+		t.Fatalf("defaults = %+v, want an empty path and 720h", log)
+	}
+
+	cfg, _, err := Load(write(t, "[log]\npath = \"/tmp/signals.jsonl\"\nretention = \"48h\"\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Path != "/tmp/signals.jsonl" || cfg.Log.Retention.Std() != 48*time.Hour {
+		t.Fatalf("log = %+v", cfg.Log)
+	}
+
+	if _, _, err := Load(write(t, "[log]\nretention = \"-1h\"\n"), true); err == nil {
+		t.Fatal("a negative retention was accepted")
+	}
+}
