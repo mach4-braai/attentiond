@@ -55,6 +55,13 @@ type StoreConfig struct {
 	// the tests want and what a daemon with no writable state directory
 	// falls back to.
 	DecisionPath string
+	// SignalLogPath is the JSON Lines file every appearance, change and
+	// disappearance is appended to. Empty keeps no log.
+	SignalLogPath string
+	// SignalRetention is how long a signal log entry is kept. Entries older
+	// than this are dropped by a rewrite at most once an hour. Zero keeps
+	// them forever.
+	SignalRetention time.Duration
 	// Observer is called with every transition, outside the store lock, after
 	// the write that produced it. It must not block.
 	Observer func([]Transition)
@@ -85,6 +92,12 @@ type Store struct {
 	cfg        StoreConfig
 	log        *slog.Logger
 	now        func() time.Time
+	// signals is the append-only record of appearances, changes and
+	// disappearances. Nil when no path is configured.
+	signals *signalLog
+	// pending holds entries queued under mu that flushSignals has yet to
+	// write.
+	pending []SignalEntry
 }
 
 // NewStore returns a store holding the decisions an earlier run left behind.
@@ -105,13 +118,17 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 	} else if len(saved.decisions) > 0 {
 		log.Info("decisions restored", "path", cfg.DecisionPath, "count", len(saved.decisions))
 	}
-	return &Store{
+	store := &Store{
 		items:     make(map[string]Item),
 		decisions: saved.decisions,
 		cfg:       cfg,
 		log:       log,
 		now:       now,
 	}
+	if cfg.SignalLogPath != "" {
+		store.signals = &signalLog{path: cfg.SignalLogPath, retention: cfg.SignalRetention, now: now}
+	}
+	return store
 }
 
 // ReplaceSource swaps the full set of items owned by one adapter. Items the
@@ -144,9 +161,11 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 		delete(s.items, id)
 		s.log.Info("item removed",
 			"item_id", id, "source", item.Source, "state", string(item.State))
+		s.signal(signalEntry(now, SignalDisappeared, item))
 	}
 	s.mu.Unlock()
 
+	s.flushSignals()
 	s.observe(transitions)
 }
 
@@ -169,6 +188,7 @@ func (s *Store) Put(item Item) Item {
 	transitions = s.record(transitions, prev, existed, item)
 	s.mu.Unlock()
 
+	s.flushSignals()
 	s.observe(transitions)
 	return item
 }
@@ -178,6 +198,7 @@ func (s *Store) Put(item Item) Item {
 // the board without them filters on Item.Stale, and /api/stale is the list
 // that has nothing else.
 func (s *Store) Items() []Item {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -186,6 +207,7 @@ func (s *Store) Items() []Item {
 
 // Get returns one item as every list would show it.
 func (s *Store) Get(key string) (Item, bool) {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -200,6 +222,7 @@ func (s *Store) Get(key string) (Item, bool) {
 // attention state, minus anything snoozed, stale, or done for longer than
 // DoneTTL.
 func (s *Store) Attention() []Item {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -208,6 +231,7 @@ func (s *Store) Attention() []Item {
 
 // Board returns the live items and the counts that go beside them.
 func (s *Store) Board() Board {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -339,6 +363,7 @@ func (s *Store) persist(generation uint64, saved state) {
 
 // CountBySource returns how many live items each source currently owns.
 func (s *Store) CountBySource() map[string]int {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -391,6 +416,7 @@ func (s *Store) sweep() {
 		delete(s.items, id)
 		s.log.Info("item expired",
 			"item_id", id, "source", item.Source, "state", string(item.State))
+		s.signal(signalEntry(now, SignalDisappeared, item))
 	}
 }
 
@@ -487,6 +513,13 @@ func (s *Store) record(transitions []Transition, prev Item, existed bool, next I
 	default:
 		return transitions
 	}
+	if existed {
+		entry := signalEntry(s.now(), SignalChanged, next)
+		entry.PrevState, entry.PrevLabel = string(prev.State), transitionWord(prev)
+		s.signal(entry)
+	} else {
+		s.signal(signalEntry(s.now(), SignalAppeared, next))
+	}
 	return s.transition(transitions, prev, existed, next)
 }
 
@@ -518,4 +551,31 @@ func (s *Store) observe(transitions []Transition) {
 		return
 	}
 	s.cfg.Observer(transitions)
+}
+
+// signal queues one entry for the signal log. It assumes the lock is held;
+// flushSignals writes the queue once the lock is free.
+func (s *Store) signal(entry SignalEntry) {
+	if s.signals == nil {
+		return
+	}
+	s.pending = append(s.pending, entry)
+}
+
+// flushSignals appends the queued entries to the signal log. It takes the lock
+// only to drain the queue, so a slow disk never stalls a poll or a read. A
+// failed write is logged and dropped: the slog line for the same change is
+// already out.
+func (s *Store) flushSignals() {
+	if s.signals == nil {
+		return
+	}
+	s.mu.Lock()
+	entries := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+
+	if err := s.signals.append(entries); err != nil {
+		s.log.Warn("signal log not written", "path", s.signals.path, "error", err)
+	}
 }

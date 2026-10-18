@@ -45,6 +45,18 @@ type Config struct {
 	GitHub    GitHub    `toml:"github"`
 	Calendar  Calendar  `toml:"calendar"`
 	Spend     Spend     `toml:"spend"`
+	Log       Log       `toml:"log"`
+}
+
+// Log is the signal log: one JSON line for every item that appears, changes
+// state or label, or disappears. GET /api/log serves it.
+type Log struct {
+	// Path is the file. Empty resolves to
+	// $XDG_STATE_HOME/attentiond/signals.jsonl, beside the decisions file.
+	Path string `toml:"path"`
+	// Retention is how long an entry is kept. Older entries are dropped by a
+	// rewrite at most once an hour. Zero keeps everything.
+	Retention Duration `toml:"retention"`
 }
 
 // Attention tunes the queue itself rather than any one source.
@@ -247,6 +259,7 @@ func Default() Config {
 			LookupsPerNote: 20,
 			MinLookups:     100,
 		},
+		Log: Log{Retention: Duration(720 * time.Hour)},
 	}
 }
 
@@ -320,6 +333,7 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		{"attention.stale_after", cfg.Attention.StaleAfter},
 		{"attention.snooze_for", cfg.Attention.SnoozeFor},
 		{"events.ttl", cfg.Events.TTL},
+		{"log.retention", cfg.Log.Retention},
 	} {
 		if check.value < 0 {
 			return Default(), false, fmt.Errorf("%s: %s %s: want zero or a period",

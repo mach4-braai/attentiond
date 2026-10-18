@@ -93,12 +93,18 @@ func run() error {
 	if statePath == "" {
 		statePath = attention.DefaultDecisionPath()
 	}
+	signalPath := strings.TrimSpace(cfg.Log.Path)
+	if signalPath == "" {
+		signalPath = attention.DefaultSignalLogPath()
+	}
 	storeConfig := attention.StoreConfig{
-		EventTTL:     cfg.Events.TTL.Std(),
-		DoneTTL:      cfg.Attention.DoneTTL.Std(),
-		StaleAfter:   cfg.Attention.StaleAfter.Std(),
-		TopLabels:    labelSet(cfg.Attention.TopLabels),
-		DecisionPath: statePath,
+		EventTTL:        cfg.Events.TTL.Std(),
+		DoneTTL:         cfg.Attention.DoneTTL.Std(),
+		StaleAfter:      cfg.Attention.StaleAfter.Std(),
+		TopLabels:       labelSet(cfg.Attention.TopLabels),
+		DecisionPath:    statePath,
+		SignalLogPath:   signalPath,
+		SignalRetention: cfg.Log.Retention.Std(),
 	}
 	if notifier != nil {
 		storeConfig.Observer = notifier.Observe
@@ -188,6 +194,7 @@ func run() error {
 		"stale_after", staleWord(cfg.Attention.StaleAfter),
 		"snooze_for", cfg.Attention.SnoozeFor.String(),
 		"state_file", statePath,
+		"signal_log", signalPath,
 		"top_labels", strings.Join(cfg.Attention.TopLabels, ","))
 
 	errs := make(chan error, 1)

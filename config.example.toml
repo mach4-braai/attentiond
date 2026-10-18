@@ -191,3 +191,13 @@ sync = ["omp", "stats", "--summary"]
 advisor_cost = 25          # dollars
 lookups_per_note = 20      # read, grep and glob calls per advise call
 min_lookups = 100          # below this many lookups the ratio is not judged
+
+[log]
+# The signal log: one JSON line for every item that appears, changes state or
+# label, or disappears, served at GET /api/log. Empty path resolves to
+# $XDG_STATE_HOME/attentiond/signals.jsonl, beside the decisions file.
+# path = ""
+
+# Entries older than this are dropped by a rewrite at most once an hour. Zero
+# keeps everything.
+retention = "720h"
