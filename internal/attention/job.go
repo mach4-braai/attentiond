@@ -11,6 +11,21 @@ const (
 	JobFinished JobStatus = "finished"
 )
 
+// The tools a job can run, each a script named <tool>.sh in the tools
+// directory.
+const (
+	ToolRebase        = "rebase"
+	ToolAgentRebase   = "agent-rebase"
+	ToolAgentComments = "agent-comments"
+)
+
+// Tools lists every tool, in the order they are documented.
+var Tools = []string{ToolRebase, ToolAgentRebase, ToolAgentComments}
+
+// ResultNeedsConflicts is rebase reporting conflicts it did not try to
+// resolve. The runner hands those to agent-rebase.
+const ResultNeedsConflicts = "needs-conflicts"
+
 // Results that change how an item reads. Any other RESULT word leaves the
 // source's label in place.
 const (
