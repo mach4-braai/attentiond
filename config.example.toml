@@ -195,3 +195,41 @@ sync = ["omp", "stats", "--summary"]
 advisor_cost = 25          # dollars
 lookups_per_note = 20      # read, grep and glob calls per advise call
 min_lookups = 100          # below this many lookups the ratio is not judged
+
+[tools]
+# Runs scripts on the pull requests you watch: rebase when one falls into
+# conflict, answer review comments from people you name. Off by default. The
+# scripts push to your branches with your credentials, and the README's
+# "Watching pull requests" section explains who can start one.
+enabled = false
+
+# Directory holding rebase.sh, agent-rebase.sh and agent-comments.sh. Required
+# when enabled; a missing directory fails startup. A relative path is resolved
+# against the directory of this file, not the binary, so it works the same
+# from `go run`.
+# dir = "tools"
+
+# One log file per run. Empty is runs/ beside state_file.
+# log_dir = ""
+
+# Logins whose comments agent-comments acts on. Bots never count, even when
+# listed. Empty means agent-comments never runs.
+comment_authors = []
+
+# How long the newest unhandled comment must sit before agent-comments starts,
+# so one review with five comments starts one run rather than five.
+comment_quiet = "2m"
+
+# Also rebase a pull request that is only behind its base, not conflicting.
+# Every rebase force-pushes, restarts CI and may dismiss approvals.
+rebase_behind = false
+
+# How long each tool may run before it gets SIGTERM, then SIGKILL ten seconds
+# later. Either way the job fails.
+timeouts = { rebase = "10m", agent-rebase = "45m", agent-comments = "45m" }
+
+# The local clone each tool works in, by owner/name. ~ is your home directory,
+# and a relative path is resolved like dir. A watched pull request in a
+# repository not listed here fails with "no checkout configured".
+[tools.checkouts]
+"owner/name" = "~/src/name"

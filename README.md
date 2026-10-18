@@ -130,6 +130,18 @@ sync = ["omp", "stats", "--summary"]   # indexes new turns before each read; [] 
 advisor_cost = 25              # dollars per advisor transcript; 0 is off
 lookups_per_note = 20          # advisor read/grep/glob calls per advise call; 0 is off
 min_lookups = 100              # lookups before the ratio counts
+
+[tools]
+enabled = false                # runs scripts on watched pull requests; see below
+# dir = "tools"                # required when enabled; relative to this file
+# log_dir = ""                 # default: runs/ beside state_file
+comment_authors = []           # logins agent-comments acts on; empty means never
+comment_quiet = "2m"           # newest comment must be this old before a run
+rebase_behind = false          # also rebase a pull request that is only behind
+timeouts = { rebase = "10m", agent-rebase = "45m", agent-comments = "45m" }
+
+[tools.checkouts]              # owner/name = local clone; ~ is your home
+# "didx-xyz/tofu" = "~/didx.projects/tofu"
 ```
 
 A file only has to say what it changes; anything absent keeps its default. A
@@ -623,6 +635,122 @@ the data: `/health` carries it on the source, and `/api/work` and
 can say so. `healthy` stays true, because the adapter works; the answer is just
 not the whole answer.
 
+## Watching pull requests
+
+Some pull request chores are routine: a branch falls into conflict with its
+base, or a reviewer leaves a few clear comments. Watch one of your own pull
+requests and attentiond runs a tool on it when that happens. You get pinged
+only when the tool cannot finish the job.
+
+Click Watch on the item, or post with the header:
+
+```bash
+curl -sS -X POST -H 'X-Attentiond: 1' \
+  'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/watch'
+```
+
+Only a pull request you authored can be watched. Unwatch takes it back. A
+watch ends by itself 14 days after the pull request stops appearing in the
+GitHub poll, which happens once it merges or closes.
+
+### Tools
+
+A tool is a script, `<dir>/<tool>.sh`, started as a child process with the
+repository and the pull request number:
+
+```
+tools/rebase.sh didx-xyz/tofu 42
+```
+
+| Tool | Runs when |
+| --- | --- |
+| `rebase` | the pull request becomes `DIRTY` or `CONFLICTING`, or `BEHIND` with `rebase_behind = true` |
+| `agent-rebase` | right after `rebase` reports `needs-conflicts` |
+| `agent-comments` | there are unhandled comments from `comment_authors`, and the newest is older than `comment_quiet` |
+
+`rebase` fires when the merge state starts to call for one, not on every check
+while it does. GitHub keeps reporting a conflict until it recomputes after the
+push, and a conflict no tool could resolve stays a conflict. Without that rule
+the same pair of tools would run again every few seconds.
+
+Each item runs one tool at a time. A trigger that arrives while a tool is
+running waits behind it, and the same tool never waits twice. attentiond starts
+the script with its working directory and `ATTENTIOND_CHECKOUT` set to the
+clone named in `[tools.checkouts]`. `agent-comments` also gets
+`ATTENTIOND_COMMENTS`, the path of a JSON file holding the comments to address.
+A repository with no checkout configured fails at once with
+`no checkout configured for <repo>`.
+
+stdout and stderr go to one log file per run, under `log_dir`, and the item's
+`job.log` points at it. The last line matching `RESULT: <word> <detail>` is
+the result. A script that prints no such line fails. So does one that runs past
+its timeout: attentiond sends SIGTERM to its whole process group, then SIGKILL
+ten seconds later. While a tool runs, the item reads `agent <tool>`. A result of
+`needs-human` or `failed` turns it into `needs human` or `agent failed` and
+sends a notification; any other result leaves the GitHub label in place. See
+`GET /api/jobs` for the full table.
+
+A restart reruns from scratch any job it finds queued or running, once GitHub
+reports the pull request again. That covers a daemon stopped mid-run, since
+shutdown leaves the interrupted job marked as running. With `[tools]` turned
+off, those jobs are marked failed instead, so no item claims a tool is working
+on it forever.
+
+### Comments
+
+attentiond reads comments only for watched pull requests, once per
+`[github] poll`: issue comments, review bodies and comments on lines of the
+diff. A comment counts as unhandled when no tool has been given it yet and it
+was written after the watch began. Watching asks for help with what comes next,
+not for every old conversation to be reopened.
+
+The ids given to `agent-comments` are kept in `[daemon] state_file`, so a
+restart does not hand the same review to an agent twice. They count as handled
+whatever the result. A comment the tool failed on would fail again every quiet
+period, and the result has already put the pull request in front of you.
+
+### Configuration
+
+```toml
+[tools]
+enabled = true
+dir = "tools"
+comment_authors = ["alice", "bob"]
+timeouts = { agent-comments = "30m" }
+
+[tools.checkouts]
+"didx-xyz/tofu" = "~/didx.projects/tofu"
+```
+
+`dir` is required when `enabled` is on, and a relative path is resolved against
+the directory of the config file, not the binary: `go run` puts the binary in a
+temporary directory. A missing directory fails startup. Checkout paths expand
+`~` and resolve the same way. `log_dir` defaults to `runs/` beside the state
+file. A tool missing from `timeouts` keeps its default: ten minutes for
+`rebase`, 45 for the agent tools.
+
+### Trust model
+
+Tools push to your branches with your credentials, so the rules sit with who
+can start one and what reaches it:
+
+- attentiond listens on loopback only. `watch` and `unwatch` need the header
+  `X-Attentiond: 1`, and a browser has to send a CORS preflight before a
+  request with a custom header. attentiond never answers one, so a web page
+  open in your browser cannot watch a pull request for you.
+- Only pull requests you authored can be watched. Anybody else's branch is not
+  yours to push to.
+- Comment authors are filtered inside the GitHub client, before anything
+  reaches the runner. Only logins in `comment_authors` pass, bot accounts never
+  pass even when listed, and an empty list passes nobody. Text from a stranger
+  never reaches an agent.
+- attentiond runs no git and no model itself. It starts the scripts in `dir`
+  as you, so whatever is in that directory runs with your access. The scripts
+  take a lease before they push, so a rerun after a restart cannot overwrite
+  somebody else's push.
+- Run logs can hold whatever a tool printed. They are written readable by you
+  only.
+
 ## Notifications
 
 A dashboard answers "what is waiting on me" for somebody who is looking at it.
@@ -720,3 +848,7 @@ state here that no source can reproduce: GitHub knows whether a pull request is
 mergeable, and nothing but this file knows you decided to leave it until
 Monday. See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning
 and for the rest of the MVP design.
+
+The same file holds each item's latest tool job and the ids of the comments
+tools have already been given, so a restart neither forgets a result nor
+replays a review. Run logs go to `[tools] log_dir`.
