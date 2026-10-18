@@ -13,25 +13,25 @@ func TestJobsListsOnlyItemsWithAJobNewestFirst(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{StaleAfter: 30 * 24 * time.Hour}, &now)
 
-	old := authoredPull("didx-xyz/tofu#1")
+	old := authoredPull("example-org/infra#1")
 	old.UpdatedAt = now.Add(-60 * 24 * time.Hour)
 	store.ReplaceSource("github", []attention.Item{
 		old,
-		authoredPull("didx-xyz/tofu#2"),
-		authoredPull("didx-xyz/tofu#3"),
+		authoredPull("example-org/infra#2"),
+		authoredPull("example-org/infra#3"),
 	})
 
 	// #1 finished two months ago and has gone stale since; #2 is running now.
 	clock := now
 	now = now.Add(-60 * 24 * time.Hour)
-	if _, err := store.QueueJob("github:didx-xyz/tofu#1", "agent-comments"); err != nil {
+	if _, err := store.QueueJob("github:example-org/infra#1", "agent-comments"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.FinishJob("github:didx-xyz/tofu#1", "pushed", "abc123"); err != nil {
+	if _, err := store.FinishJob("github:example-org/infra#1", "pushed", "abc123"); err != nil {
 		t.Fatal(err)
 	}
 	now = clock
-	if _, err := store.QueueJob("github:didx-xyz/tofu#2", "rebase"); err != nil {
+	if _, err := store.QueueJob("github:example-org/infra#2", "rebase"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,7 +39,7 @@ func TestJobsListsOnlyItemsWithAJobNewestFirst(t *testing.T) {
 	if list.Count != 2 || len(list.Items) != 2 {
 		t.Fatalf("jobs = %+v", list.Items)
 	}
-	if list.Items[0].ID != "github:didx-xyz/tofu#2" || list.Items[1].ID != "github:didx-xyz/tofu#1" {
+	if list.Items[0].ID != "github:example-org/infra#2" || list.Items[1].ID != "github:example-org/infra#1" {
 		t.Fatalf("not newest job first: %s, %s", list.Items[0].ID, list.Items[1].ID)
 	}
 	if !list.Items[1].Stale || list.StaleCount != 1 {

@@ -171,7 +171,7 @@ func TestInboxReportsTruncationInsteadOfPretendingToBeComplete(t *testing.T) {
 }
 
 func TestInboxAppliesTheScopeToBothSearches(t *testing.T) {
-	scope, err := ParseScope("didx-xyz/tofu, mach4-braai/hum", "mach4-braai")
+	scope, err := ParseScope("example-org/infra, mach4-braai/hum", "mach4-braai")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestInboxAppliesTheScopeToBothSearches(t *testing.T) {
 
 	for _, request := range *requests {
 		query := request.Variables["q"].(string)
-		for _, want := range []string{"repo:didx-xyz/tofu", "repo:mach4-braai/hum", "org:mach4-braai"} {
+		for _, want := range []string{"repo:example-org/infra", "repo:mach4-braai/hum", "org:mach4-braai"} {
 			if !strings.Contains(query, want) {
 				t.Errorf("query %q is missing %q", query, want)
 			}
@@ -197,9 +197,9 @@ func TestParseScopeRejectsWhatGitHubWouldSilentlyIgnore(t *testing.T) {
 		repos, orgs string
 	}{
 		{repos: "tofu"},
-		{repos: "didx-xyz/"},
+		{repos: "example-org/"},
 		{repos: "/tofu"},
-		{repos: "didx-xyz/tofu/extra"},
+		{repos: "example-org/infra/extra"},
 		{orgs: "mach4-braai/hum"},
 	} {
 		if _, err := ParseScope(bad.repos, bad.orgs); err == nil {

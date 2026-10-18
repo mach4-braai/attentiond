@@ -194,7 +194,7 @@ func TestLabelChangeIsATransition(t *testing.T) {
 		Observer: func(batch []Transition) { seen = append(seen, batch...) },
 	}, &now)
 
-	asked := adapterItem("pr", StateNeedsAttention, SeverityWarning, "didx-xyz/tofu#1")
+	asked := adapterItem("pr", StateNeedsAttention, SeverityWarning, "example-org/infra#1")
 	asked.Label = "review requested"
 
 	store.ReplaceSource("github", []Item{asked})
@@ -253,7 +253,7 @@ func TestTopLabelsOutrankEveryRankASourceCanGiveItself(t *testing.T) {
 	store.Put(Item{
 		ID:       Key("shell", "tofu"),
 		Source:   "shell",
-		Title:    "didx-org · tofu plan -out=tfplan",
+		Title:    "example-org · tofu plan -out=tfplan",
 		State:    StateNeedsAttention,
 		Severity: SeverityWarning,
 		// Matching folds case and space, because this came from a config file.

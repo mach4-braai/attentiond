@@ -66,7 +66,7 @@ func action(t *testing.T, item attention.Item, id string) attention.Action {
 func TestSnoozeThroughTheHrefTheItemCarries(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{review("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{review("example-org/infra#42")})
 
 	queue := decodeList(t, do(t, handler, http.MethodGet, "/api/attention", ""))
 	snooze := action(t, queue.Items[0], "snooze")
@@ -104,9 +104,9 @@ func TestSnoozeThroughTheHrefTheItemCarries(t *testing.T) {
 func TestSnoozeLengthCanBeOverriddenPerRequest(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{review("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{review("example-org/infra#42")})
 
-	path := "/api/items/github:didx-xyz%2Ftofu%2342/snooze?for=30m"
+	path := "/api/items/github:example-org%2Finfra%2342/snooze?for=30m"
 	if recorder := do(t, handler, http.MethodPost, path, ""); recorder.Code != http.StatusOK {
 		t.Fatalf("snooze: %d %s", recorder.Code, recorder.Body)
 	}
@@ -121,16 +121,16 @@ func TestSnoozeLengthCanBeOverriddenPerRequest(t *testing.T) {
 func TestDecisionRejectsWhatItCannotDo(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{review("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{review("example-org/infra#42")})
 
 	cases := map[string]struct {
 		path string
 		want int
 	}{
-		"unknown decision": {"/api/items/github:didx-xyz%2Ftofu%2342/postpone", http.StatusBadRequest},
-		"unusable period":  {"/api/items/github:didx-xyz%2Ftofu%2342/snooze?for=soon", http.StatusBadRequest},
-		"negative period":  {"/api/items/github:didx-xyz%2Ftofu%2342/snooze?for=-2h", http.StatusBadRequest},
-		"item not held":    {"/api/items/github:didx-xyz%2Ftofu%23999/snooze", http.StatusNotFound},
+		"unknown decision": {"/api/items/github:example-org%2Finfra%2342/postpone", http.StatusBadRequest},
+		"unusable period":  {"/api/items/github:example-org%2Finfra%2342/snooze?for=soon", http.StatusBadRequest},
+		"negative period":  {"/api/items/github:example-org%2Finfra%2342/snooze?for=-2h", http.StatusBadRequest},
+		"item not held":    {"/api/items/github:example-org%2Finfra%23999/snooze", http.StatusNotFound},
 	}
 
 	for name, tc := range cases {
@@ -146,14 +146,14 @@ func TestStaleWorkGetsItsOwnListAndIsCountedOnTheBoard(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{StaleAfter: 30 * 24 * time.Hour}, &now)
 
-	old := review("didx-xyz/mono#7")
+	old := review("example-org/mono#7")
 	old.UpdatedAt = now.Add(-40 * 24 * time.Hour)
-	fresh := review("didx-xyz/tofu#42")
+	fresh := review("example-org/infra#42")
 	fresh.UpdatedAt = now.Add(-time.Hour)
 	store.ReplaceSource("github", []attention.Item{old, fresh})
 
 	board := decodeList(t, do(t, handler, http.MethodGet, "/api/work", ""))
-	if len(board.Items) != 1 || board.Items[0].ID != "github:didx-xyz/tofu#42" {
+	if len(board.Items) != 1 || board.Items[0].ID != "github:example-org/infra#42" {
 		t.Fatalf("the board still carries month-old work: %+v", board.Items)
 	}
 	if board.StaleCount != 1 {
@@ -161,7 +161,7 @@ func TestStaleWorkGetsItsOwnListAndIsCountedOnTheBoard(t *testing.T) {
 	}
 
 	stale := decodeList(t, do(t, handler, http.MethodGet, "/api/stale", ""))
-	if len(stale.Items) != 1 || stale.Items[0].ID != "github:didx-xyz/mono#7" || !stale.Items[0].Stale {
+	if len(stale.Items) != 1 || stale.Items[0].ID != "github:example-org/mono#7" || !stale.Items[0].Stale {
 		t.Fatalf("/api/stale did not hold the old review: %+v", stale.Items)
 	}
 	if action(t, stale.Items[0], "bump").Method != "POST" {
@@ -173,10 +173,10 @@ func TestTheBoardsAttentionCountMatchesTheQueue(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{DoneTTL: 10 * time.Minute}, &now)
 
-	finished := review("didx-xyz/mono#7")
+	finished := review("example-org/mono#7")
 	finished.State = attention.StateDone
 	finished.Label = "done"
-	store.ReplaceSource("github", []attention.Item{finished, review("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{finished, review("example-org/infra#42")})
 
 	// Past done_ttl the finished review leaves the queue. The board keeps
 	// showing it, and has to stop counting it.
@@ -196,8 +196,8 @@ func TestTheBoardsAttentionCountMatchesTheQueue(t *testing.T) {
 func TestHealthCountsStandingDecisions(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{review("didx-xyz/tofu#42")})
-	do(t, handler, http.MethodPost, "/api/items/github:didx-xyz%2Ftofu%2342/bump", "")
+	store.ReplaceSource("github", []attention.Item{review("example-org/infra#42")})
+	do(t, handler, http.MethodPost, "/api/items/github:example-org%2Finfra%2342/bump", "")
 
 	var health healthResponse
 	recorder := do(t, handler, http.MethodGet, "/health", "")

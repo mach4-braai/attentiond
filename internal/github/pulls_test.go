@@ -11,10 +11,10 @@ import (
 func pull(number int, mutate func(*PullRequest)) PullRequest {
 	pr := PullRequest{
 		Number:           number,
-		Title:            "Move the RDS credentials into Aurora",
-		URL:              "https://github.com/didx-xyz/tofu/pull/" + strconv.Itoa(number),
+		Title:            "Add a health check endpoint",
+		URL:              "https://github.com/example-org/infra/pull/" + strconv.Itoa(number),
 		UpdatedAt:        time.Date(2026, 9, 12, 15, 0, 0, 0, time.UTC),
-		Repository:       Repository{NameWithOwner: "didx-xyz/tofu"},
+		Repository:       Repository{NameWithOwner: "example-org/infra"},
 		ReviewDecision:   "REVIEW_REQUIRED",
 		Mergeable:        "MERGEABLE",
 		MergeStateStatus: "BLOCKED",
@@ -179,7 +179,7 @@ func TestClassifyLeavesDraftsPlainWhenStalenessIsDisabled(t *testing.T) {
 
 func TestQueueOrderPutsTheCheapestWorkFirst(t *testing.T) {
 	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
-	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+	cfg := Config{PriorityRepos: map[string]bool{"example-org/infra": true}}
 
 	mergeable := pull(1, func(pr *PullRequest) {
 		pr.ReviewDecision = "APPROVED"
@@ -223,7 +223,7 @@ func TestQueueOrderPutsTheCheapestWorkFirst(t *testing.T) {
 	var tofuRank, elsewhereRank int
 	for _, item := range items {
 		switch item.Context["repo"] {
-		case "didx-xyz/tofu":
+		case "example-org/infra":
 			if item.Label == labelReviewRequested {
 				tofuRank = item.Priority
 			}
@@ -240,7 +240,7 @@ func TestQueueOrderPutsTheCheapestWorkFirst(t *testing.T) {
 func TestPriorityRepoMatchingIgnoresCase(t *testing.T) {
 	// GitHub answers with whatever case the repository was created in, so a
 	// config file is allowed to disagree about it.
-	set, err := NewPriorityRepos([]string{"DIDx-XYZ/Tofu"})
+	set, err := NewPriorityRepos([]string{"Example-Org/Infra"})
 	if err != nil {
 		t.Fatalf("NewPriorityRepos: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestPriorityRepoMatchingIgnoresCase(t *testing.T) {
 		time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC),
 	)
 	if items[0].Priority != attention.PriorityBlockingOthers {
-		t.Errorf("priority = %d, want %d: didx-xyz/tofu did not match DIDx-XYZ/Tofu",
+		t.Errorf("priority = %d, want %d: example-org/infra did not match Example-Org/Infra",
 			items[0].Priority, attention.PriorityBlockingOthers)
 	}
 
@@ -280,7 +280,7 @@ func requested(reviewers ...Reviewer) func(*PullRequest) {
 
 func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
-	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+	cfg := Config{PriorityRepos: map[string]bool{"example-org/infra": true}}
 
 	cases := []struct {
 		name                  string
@@ -314,7 +314,7 @@ func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
 
 	for _, tc := range cases {
 		for repo, want := range map[string]int{
-			"didx-xyz/tofu":       tc.inPriority,
+			"example-org/infra":   tc.inPriority,
 			"mcgeerdev/portfolio": tc.elsewhere,
 		} {
 			t.Run(tc.name+" in "+repo, func(t *testing.T) {
@@ -371,7 +371,7 @@ func TestReviewScopeIsUnsetWhenTheRequestNamesNobody(t *testing.T) {
 
 func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 	now := time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)
-	cfg := Config{PriorityRepos: map[string]bool{"didx-xyz/tofu": true}}
+	cfg := Config{PriorityRepos: map[string]bool{"example-org/infra": true}}
 	elsewhere := func(pr *PullRequest) { pr.Repository = Repository{NameWithOwner: "mcgeerdev/portfolio"} }
 
 	sole := pull(1, func(pr *PullRequest) { elsewhere(pr); requested(me)(pr) })
@@ -409,12 +409,12 @@ func TestASoleReviewOutranksEveryOtherPullRequest(t *testing.T) {
 func TestAPullRequestYouApprovedStaysOnTheBoard(t *testing.T) {
 	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 
-	// didx-xyz/tofu#1009: opened by a bot, approved by you, checks still
+	// example-org/infra#1009: opened by a bot, approved by you, checks still
 	// running. Approving consumed the review request, so the only search that
 	// finds it is reviewed-by, and you are the one who has to merge it.
 	approved := pull(1009, func(pr *PullRequest) {
 		pr.Title = "Bump providers"
-		pr.Author = &Actor{Login: "app/didx-renovate"}
+		pr.Author = &Actor{Login: "app/renovate"}
 		pr.ReviewDecision = "APPROVED"
 		pr.MergeStateStatus = "UNKNOWN"
 		pr.Mergeable = "UNKNOWN"
@@ -480,13 +480,13 @@ func TestNormalizeCarriesIdentityAndAnOpenLink(t *testing.T) {
 	}
 	item := items[0]
 
-	if item.ID != "github:didx-xyz/tofu#1001" {
+	if item.ID != "github:example-org/infra#1001" {
 		t.Errorf("id = %q", item.ID)
 	}
 	if item.Source != SourceName {
 		t.Errorf("source = %q", item.Source)
 	}
-	if item.Title != "didx-xyz/tofu#1001 · Move the RDS credentials into Aurora" {
+	if item.Title != "example-org/infra#1001 · Add a health check endpoint" {
 		t.Errorf("title = %q", item.Title)
 	}
 	// Poll time would make every pull request look like it changed a second
@@ -496,7 +496,7 @@ func TestNormalizeCarriesIdentityAndAnOpenLink(t *testing.T) {
 	}
 
 	for key, want := range map[string]string{
-		"repo":            "didx-xyz/tofu",
+		"repo":            "example-org/infra",
 		"number":          "1001",
 		"role":            roleAuthor,
 		"pr_state":        labelReadyToMerge,
@@ -517,7 +517,7 @@ func TestNormalizeCarriesIdentityAndAnOpenLink(t *testing.T) {
 		t.Fatalf("actions = %+v", item.Actions)
 	}
 	action := item.Actions[0]
-	if action.Method != "GET" || action.Href != "https://github.com/didx-xyz/tofu/pull/1001" {
+	if action.Method != "GET" || action.Href != "https://github.com/example-org/infra/pull/1001" {
 		t.Errorf("action = %+v, want a GET to the pull request", action)
 	}
 }

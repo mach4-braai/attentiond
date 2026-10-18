@@ -143,7 +143,7 @@ rebase_behind = false          # also rebase a pull request that is only behind
 timeouts = { rebase = "10m", agent-rebase = "45m", agent-comments = "45m" }
 
 [tools.checkouts]              # owner/name = local clone; ~ is your home
-# "didx-xyz/tofu" = "~/didx.projects/tofu"
+# "example-org/infra" = "~/src/infra"
 ```
 
 A file only has to say what it changes; anything absent keeps its default. A
@@ -303,7 +303,7 @@ curl -sS localhost:7717/api/events -d '{
   "event": "needs_attention",
   "label": "waiting for approval",
   "title": "tofu plan wants approval",
-  "context": {"dir": "~/didx.projects/tofu"}
+  "context": {"dir": "~/src/infra"}
 }'
 ```
 
@@ -339,11 +339,11 @@ when Herdr is unreachable or attentiond is running from a fixture.
 What a human says about one item, as opposed to what a source observed:
 `snooze`, `bump`, or `clear`. Every item carries these as actions, so a
 consumer posts the `href` it was given rather than building the path. The id is
-percent-encoded, because a GitHub item id is `github:didx-xyz/tofu#42` and
+percent-encoded, because a GitHub item id is `github:example-org/infra#42` and
 contains both a slash and a fragment marker.
 
 ```bash
-curl -sS -X POST 'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/snooze'
+curl -sS -X POST 'localhost:7717/api/items/github:example-org%2Finfra%2342/snooze'
 curl -sS -X POST 'localhost:7717/api/items/herdr:w1:p1/snooze?for=30m'
 curl -sS -X POST 'localhost:7717/api/items/herdr:w1:p1/clear'
 ```
@@ -381,7 +381,7 @@ it:
 
 ```bash
 curl -sS -X POST -H 'X-Attentiond: 1' \
-  'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/watch'
+  'localhost:7717/api/items/github:example-org%2Finfra%2342/watch'
 ```
 
 A custom header makes a browser send a CORS preflight first, and attentiond
@@ -406,12 +406,12 @@ a quiet pull request still has something to say.
 
 ```json
 "job": {
-  "item": "github:didx-xyz/tofu#42",
+  "item": "github:example-org/infra#42",
   "tool": "rebase",
   "status": "finished",
   "result": "needs-conflicts",
   "detail": "main.tf variables.tf",
-  "log": "/Users/me/.local/state/attentiond/runs/github_didx-xyz_tofu_42-rebase-20260912T120000Z.log",
+  "log": "/Users/me/.local/state/attentiond/runs/github_example-org_tofu_42-rebase-20260912T120000Z.log",
   "queued_at": "2026-09-12T12:00:00Z",
   "started_at": "2026-09-12T12:00:00Z",
   "finished_at": "2026-09-12T12:00:41Z"
@@ -543,7 +543,7 @@ approval with an empty body is not something it can see. `reviewed-by:@me` asks
 the question directly rather than hoping a review left a trace another
 qualifier happens to index.
 
-A live sample against `didx-xyz/tofu` does not settle it either way:
+A live sample against a work repository does not settle it either way:
 `involves:@me` returned nine pull requests including the approved one, but
 `commenter:@me` returned it too, so it was reachable through a comment rather
 than through the review. The argument for `reviewed-by` is the documented
@@ -619,7 +619,7 @@ Every repository your token can see is a lot of repositories. Narrow it in
 
 ```toml
 [github]
-orgs = ["didx-xyz", "mach4-braai"]
+orgs = ["example-org", "mach4-braai"]
 repos = ["mcgeerdev/portfolio"]
 ```
 
@@ -652,7 +652,7 @@ Click Watch on the item, or post with the header:
 
 ```bash
 curl -sS -X POST -H 'X-Attentiond: 1' \
-  'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/watch'
+  'localhost:7717/api/items/github:example-org%2Finfra%2342/watch'
 ```
 
 Only a pull request you authored can be watched. Unwatch takes it back. A
@@ -665,7 +665,7 @@ A tool is a script, `<dir>/<tool>.sh`, started as a child process with the
 repository and the pull request number:
 
 ```
-tools/rebase.sh didx-xyz/tofu 42
+tools/rebase.sh example-org/infra 42
 ```
 
 | Tool | Runs when |
@@ -725,7 +725,7 @@ comment_authors = ["alice", "bob"]
 timeouts = { agent-comments = "30m" }
 
 [tools.checkouts]
-"didx-xyz/tofu" = "~/didx.projects/tofu"
+"example-org/infra" = "~/src/infra"
 ```
 
 `dir` is required when `enabled` is on, and a relative path is resolved against

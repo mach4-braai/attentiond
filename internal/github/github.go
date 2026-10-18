@@ -200,7 +200,7 @@ func NewScope(repos, orgs []string) (Scope, error) {
 //
 // Names are folded to lower case. GitHub is case-insensitive about owners and
 // repositories, and the API answers with whatever case the repository was
-// created in, so a config file saying didx-xyz/Tofu has to match.
+// created in, so a config file saying example-org/Infra has to match.
 func NewPriorityRepos(names []string) (map[string]bool, error) {
 	if len(names) == 0 {
 		return nil, nil

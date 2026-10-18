@@ -28,8 +28,8 @@ dir = "tools"
 timeouts = { rebase = "2m" }
 
 [tools.checkouts]
-"Didx-XYZ/Tofu" = "~/didx.projects/tofu"
-"didx-xyz/mono" = "../mono"
+"Example-Org/Infra" = "~/src/infra"
+"example-org/mono" = "../mono"
 `)
 	cfg, _, err := Load(path, true)
 	if err != nil {
@@ -41,10 +41,10 @@ timeouts = { rebase = "2m" }
 	if cfg.Tools.Dir != filepath.Join(base, "tools") {
 		t.Errorf("dir = %q, want it beside the config file", cfg.Tools.Dir)
 	}
-	if got := cfg.Tools.Checkouts["didx-xyz/tofu"]; got != filepath.Join(home, "didx.projects", "tofu") {
+	if got := cfg.Tools.Checkouts["example-org/infra"]; got != filepath.Join(home, "src", "infra") {
 		t.Errorf("checkout = %q: ~ not expanded or key not folded (%v)", got, cfg.Tools.Checkouts)
 	}
-	if got := cfg.Tools.Checkouts["didx-xyz/mono"]; got != filepath.Join(filepath.Dir(base), "mono") {
+	if got := cfg.Tools.Checkouts["example-org/mono"]; got != filepath.Join(filepath.Dir(base), "mono") {
 		t.Errorf("relative checkout = %q", got)
 	}
 	if cfg.Tools.Timeouts["rebase"].Std() != 2*time.Minute || cfg.Tools.Timeouts["agent-rebase"] == 0 {

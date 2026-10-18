@@ -52,7 +52,7 @@ func TestExpandWalksARecurrenceAndHonoursItsExceptions(t *testing.T) {
 
 	var standups []time.Time
 	for _, occurrence := range got {
-		if occurrence.UID == "standup@didx" {
+		if occurrence.UID == "standup@example" {
 			standups = append(standups, occurrence.Start.UTC())
 		}
 	}
@@ -76,7 +76,7 @@ func TestExpandFollowsAnInstanceThatMoved(t *testing.T) {
 	var hours []int
 	for _, occurrence := range got {
 		at := occurrence.Start.UTC()
-		if occurrence.UID == "standup@didx" && at.YearDay() == thursday.YearDay() {
+		if occurrence.UID == "standup@example" && at.YearDay() == thursday.YearDay() {
 			hours = append(hours, at.Hour())
 		}
 	}
@@ -92,7 +92,7 @@ func TestExpandDropsAnInstanceThatWasCancelled(t *testing.T) {
 
 	for _, occurrence := range got {
 		at := occurrence.Start.UTC()
-		if occurrence.UID == "standup@didx" && at.Weekday() == time.Friday {
+		if occurrence.UID == "standup@example" && at.Weekday() == time.Friday {
 			t.Fatalf("a cancelled instance is still on the calendar: %s", at)
 		}
 	}
@@ -105,7 +105,7 @@ func TestExpandReadsAnExclusionInItsOwnTimezone(t *testing.T) {
 
 	var days []int
 	for _, occurrence := range got {
-		if occurrence.UID == "design@didx" {
+		if occurrence.UID == "design@example" {
 			days = append(days, occurrence.Start.UTC().Day())
 			if hour := occurrence.Start.UTC().Hour(); hour != 10 {
 				t.Errorf("instance at %02d:00 UTC, want 10:00 for a 12:00 SAST meeting", hour)
@@ -210,7 +210,7 @@ func TestResolveFeedsWorksOutEachAddress(t *testing.T) {
 	getenv := func(key string) string { return env[key] }
 
 	feeds, skipped, err := ResolveFeeds([]FeedSpec{
-		{Email: "devan.mcgeer@didx.co.za"},
+		{Email: "you@example.com"},
 		{Email: "me@gmail.com", URLEnv: "CAL_SECRET"},
 		{Email: "other@example.com", URL: "https://example.com/plain.ics", Label: "shared"},
 	}, getenv)
@@ -218,7 +218,7 @@ func TestResolveFeedsWorksOutEachAddress(t *testing.T) {
 		t.Fatalf("err=%v skipped=%v", err, skipped)
 	}
 
-	if feeds[0].URL != "https://calendar.google.com/calendar/ical/devan.mcgeer%40didx.co.za/public/basic.ics" {
+	if feeds[0].URL != "https://calendar.google.com/calendar/ical/you%40example.com/public/basic.ics" {
 		t.Errorf("derived url = %q", feeds[0].URL)
 	}
 	if feeds[1].URL != env["CAL_SECRET"] {
@@ -227,7 +227,7 @@ func TestResolveFeedsWorksOutEachAddress(t *testing.T) {
 	if feeds[2].Label != "shared" || feeds[2].URL != "https://example.com/plain.ics" {
 		t.Errorf("explicit feed = %+v", feeds[2])
 	}
-	if feeds[0].Label != "devan.mcgeer@didx.co.za" {
+	if feeds[0].Label != "you@example.com" {
 		t.Errorf("label should fall back to the email, got %q", feeds[0].Label)
 	}
 }
@@ -253,7 +253,7 @@ func TestResolveFeedsSkipsAnUnexportedSecretWithoutTakingTheRest(t *testing.T) {
 	// The file is right, the machine is not ready. Killing startup here would
 	// cost GitHub and Herdr as well, for one unexported variable.
 	feeds, skipped, err := ResolveFeeds([]FeedSpec{
-		{Email: "work@didx.co.za", URLEnv: "NOT_SET"},
+		{Email: "work@example.com", URLEnv: "NOT_SET"},
 		{Email: "other@example.com", URL: "https://example.com/plain.ics"},
 	}, func(string) string { return "" })
 	if err != nil {

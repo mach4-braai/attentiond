@@ -46,7 +46,7 @@ func TestFallsBackToOsascriptWhenTerminalNotifierFails(t *testing.T) {
 
 	err := notifier.Notify(context.Background(), notify.Notification{
 		Title: "Ready to merge",
-		Body:  "didx-xyz/tofu#1 · Move the RDS credentials",
+		Body:  "example-org/infra#1 · Add a health check endpoint",
 		Sound: "request",
 	})
 	if err != nil {
@@ -106,7 +106,7 @@ func TestSilentNotificationPassesNoSound(t *testing.T) {
 
 	err := notifier.Notify(context.Background(), notify.Notification{
 		Title: "Checks running",
-		Body:  "didx-xyz/tofu#1",
+		Body:  "example-org/infra#1",
 		Sound: "none",
 	})
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 func authoredPull(id string) attention.Item {
 	item := review(id)
 	item.Label = "rebase required"
-	item.Context = map[string]string{"role": "author", "repo": "didx-xyz/tofu", "number": "42"}
+	item.Context = map[string]string{"role": "author", "repo": "example-org/infra", "number": "42"}
 	return item
 }
 
@@ -32,10 +32,10 @@ func post(t *testing.T, handler http.Handler, path string, header bool) *httptes
 func TestWatchAndUnwatchNeedTheHeader(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{authoredPull("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{authoredPull("example-org/infra#42")})
 
 	for _, decision := range []string{"watch", "unwatch"} {
-		path := "/api/items/github:didx-xyz%2Ftofu%2342/" + decision
+		path := "/api/items/github:example-org%2Finfra%2342/" + decision
 		if recorder := post(t, handler, path, false); recorder.Code != http.StatusForbidden {
 			t.Errorf("%s without the header = %d, want 403: %s", decision, recorder.Code, recorder.Body)
 		}
@@ -49,8 +49,8 @@ func TestOnlyAPullRequestYouAuthoredCanBeWatched(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
 	store.ReplaceSource("github", []attention.Item{
-		authoredPull("didx-xyz/tofu#42"),
-		review("didx-xyz/tofu#7"),
+		authoredPull("example-org/infra#42"),
+		review("example-org/infra#7"),
 	})
 	store.Put(attention.Item{
 		ID: attention.Key("tofu", "plan"), Source: "tofu", Title: "plan",
@@ -61,9 +61,9 @@ func TestOnlyAPullRequestYouAuthoredCanBeWatched(t *testing.T) {
 		path string
 		want int
 	}{
-		"somebody else's pull request": {"/api/items/github:didx-xyz%2Ftofu%237/watch", http.StatusBadRequest},
+		"somebody else's pull request": {"/api/items/github:example-org%2Finfra%237/watch", http.StatusBadRequest},
 		"not a pull request":           {"/api/items/tofu:plan/watch", http.StatusBadRequest},
-		"item not held":                {"/api/items/github:didx-xyz%2Ftofu%23999/watch", http.StatusNotFound},
+		"item not held":                {"/api/items/github:example-org%2Finfra%23999/watch", http.StatusNotFound},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestOnlyAPullRequestYouAuthoredCanBeWatched(t *testing.T) {
 	board := decodeList(t, do(t, handler, http.MethodGet, "/api/work", ""))
 	for _, item := range board.Items {
 		for _, candidate := range item.Actions {
-			if candidate.ID == "watch" && item.ID != "github:didx-xyz/tofu#42" {
+			if candidate.ID == "watch" && item.ID != "github:example-org/infra#42" {
 				t.Errorf("%s offers a watch it would refuse", item.ID)
 			}
 		}
@@ -86,7 +86,7 @@ func TestOnlyAPullRequestYouAuthoredCanBeWatched(t *testing.T) {
 func TestWatchThroughTheHrefTheItemCarries(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	handler, store := newQueueServer(t, attention.StoreConfig{}, &now)
-	store.ReplaceSource("github", []attention.Item{authoredPull("didx-xyz/tofu#42")})
+	store.ReplaceSource("github", []attention.Item{authoredPull("example-org/infra#42")})
 
 	board := decodeList(t, do(t, handler, http.MethodGet, "/api/work", ""))
 	watch := action(t, board.Items[0], "watch")

@@ -16,7 +16,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/github"
 )
 
-const pullID = "github:didx-xyz/tofu#42"
+const pullID = "github:example-org/infra#42"
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -60,7 +60,7 @@ func (f fixture) config() Config {
 	return Config{
 		Dir:          f.tools,
 		LogDir:       f.logs,
-		Checkouts:    map[string]string{"didx-xyz/tofu": f.checkout},
+		Checkouts:    map[string]string{"example-org/infra": f.checkout},
 		Timeouts:     map[string]time.Duration{},
 		CommentQuiet: 2 * time.Minute,
 		Interval:     20 * time.Millisecond,
@@ -86,12 +86,12 @@ func pullRequest(mergeState string) attention.Item {
 	return attention.Item{
 		ID:       pullID,
 		Source:   github.SourceName,
-		Title:    "didx-xyz/tofu#42 · Move the RDS credentials",
+		Title:    "example-org/infra#42 · Add a health check endpoint",
 		State:    attention.StateNeedsAttention,
 		Severity: attention.SeverityWarning,
 		Label:    "rebase required",
 		Context: map[string]string{
-			"repo": "didx-xyz/tofu", "number": "42", "role": "author",
+			"repo": "example-org/infra", "number": "42", "role": "author",
 			"merge_state": mergeState, "mergeable": "UNKNOWN",
 		},
 	}
@@ -296,7 +296,7 @@ func TestARepoWithNoCheckoutFails(t *testing.T) {
 
 	got := job(store)
 	if got.Status != attention.JobFinished || got.Result != attention.ResultFailed ||
-		got.Detail != "no checkout configured for didx-xyz/tofu" {
+		got.Detail != "no checkout configured for example-org/infra" {
 		t.Fatalf("job = %+v", got)
 	}
 	if len(f.lines(t)) != 0 {

@@ -20,7 +20,7 @@ func TestAToolHandingBackNotifiesEvenOnASnoozedItem(t *testing.T) {
 		Now:      func() time.Time { return now },
 	})
 
-	pull := item("github:didx-xyz/tofu#1", "rebase required", attention.ToneAttention)
+	pull := item("github:example-org/infra#1", "rebase required", attention.ToneAttention)
 	pull.Context = map[string]string{"role": "author"}
 	store.ReplaceSource("github", []attention.Item{pull})
 	if _, err := store.Decide(pull.ID, attention.DecisionSnooze, now.Add(4*time.Hour)); err != nil {

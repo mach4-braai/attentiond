@@ -46,7 +46,7 @@ func item(id, label string, tone attention.Tone) attention.Item {
 	return attention.Item{
 		ID:       id,
 		Source:   "github",
-		Title:    "didx-xyz/tofu#1 · Move the RDS credentials",
+		Title:    "example-org/infra#1 · Add a health check endpoint",
 		State:    attention.StateNeedsAttention,
 		Severity: attention.SeverityWarning,
 		Label:    label,
@@ -58,8 +58,8 @@ func TestNotifiesOnlyOnAChangeIntoAWatchedLabel(t *testing.T) {
 	now := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
 	notifier, sender := testNotifier(t, []string{"ready to merge"}, &now)
 
-	mergeable := item("github:didx-xyz/tofu#1", "ready to merge", attention.ToneReady)
-	asked := item("github:didx-xyz/tofu#1", "review requested", attention.ToneAttention)
+	mergeable := item("github:example-org/infra#1", "ready to merge", attention.ToneReady)
+	asked := item("github:example-org/infra#1", "review requested", attention.ToneAttention)
 
 	// A first sighting is not a change. Every item is new in the first poll
 	// after a restart, and announcing the board on startup is how somebody
@@ -97,8 +97,8 @@ func TestFlappingUpstreamStateNotifiesOnce(t *testing.T) {
 	now := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
 	notifier, sender := testNotifier(t, []string{"ready to merge"}, &now)
 
-	mergeable := item("github:didx-xyz/tofu#1", "ready to merge", attention.ToneReady)
-	approved := item("github:didx-xyz/tofu#1", "approved", attention.ToneNeutral)
+	mergeable := item("github:example-org/infra#1", "ready to merge", attention.ToneReady)
+	approved := item("github:example-org/infra#1", "approved", attention.ToneNeutral)
 
 	// GitHub computes mergeStateStatus asynchronously and reports UNKNOWN while
 	// it is thinking, which drops a mergeable pull request to "approved" and
@@ -126,7 +126,7 @@ func TestFlappingUpstreamStateNotifiesOnce(t *testing.T) {
 	}
 
 	// A different pull request reaching the same state is its own news.
-	other := item("github:didx-xyz/mono#7", "ready to merge", attention.ToneReady)
+	other := item("github:example-org/mono#7", "ready to merge", attention.ToneReady)
 	notifier.Observe([]attention.Transition{{Prev: approved, Next: other, Existed: true}})
 	drain(notifier)
 	if len(sender.sent) != 3 {
@@ -185,9 +185,9 @@ func TestCheckedLabelsAreMatchedLoosely(t *testing.T) {
 	now := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
 	notifier, sender := testNotifier(t, []string{"  Checks Running "}, &now)
 
-	running := item("github:didx-xyz/tofu#1", "checks running", attention.ToneActive)
+	running := item("github:example-org/infra#1", "checks running", attention.ToneActive)
 	running.State = attention.StateWorking
-	before := item("github:didx-xyz/tofu#1", "awaiting review", attention.ToneNeutral)
+	before := item("github:example-org/infra#1", "awaiting review", attention.ToneNeutral)
 
 	notifier.Observe([]attention.Transition{{Prev: before, Next: running, Existed: true}})
 	drain(notifier)
@@ -207,8 +207,8 @@ func TestAnUndeliverableNotificationIsDropped(t *testing.T) {
 	notifier, sender := testNotifier(t, []string{"ready to merge"}, &now)
 	sender.err = ErrUnavailable
 
-	mergeable := item("github:didx-xyz/tofu#1", "ready to merge", attention.ToneReady)
-	approved := item("github:didx-xyz/tofu#1", "approved", attention.ToneNeutral)
+	mergeable := item("github:example-org/infra#1", "ready to merge", attention.ToneReady)
+	approved := item("github:example-org/infra#1", "approved", attention.ToneNeutral)
 
 	// Herdr not running is the normal state of a machine nobody is sitting at.
 	// It must not panic, block, or retry forever.
@@ -229,8 +229,8 @@ func TestASnoozedItemDoesNotInterrupt(t *testing.T) {
 	now := time.Date(2026, 9, 13, 9, 0, 0, 0, time.UTC)
 	notifier, sender := testNotifier(t, []string{"ready to merge"}, &now)
 
-	asked := item("github:didx-xyz/tofu#1", "review requested", attention.ToneAttention)
-	mergeable := item("github:didx-xyz/tofu#1", "ready to merge", attention.ToneReady)
+	asked := item("github:example-org/infra#1", "review requested", attention.ToneAttention)
+	mergeable := item("github:example-org/infra#1", "ready to merge", attention.ToneReady)
 	mergeable.Snoozed = true
 
 	notifier.Observe([]attention.Transition{{Prev: asked, Next: mergeable, Existed: true}})

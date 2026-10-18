@@ -30,7 +30,7 @@ const agentHeader = "X-Attentiond"
 // decide records a snooze, a bump, a watch, or the removal of one.
 //
 // The key is the whole item id, percent-encoded: a GitHub item is
-// "github:didx-xyz/tofu#42", which contains both a slash and a fragment
+// "github:example-org/infra#42", which contains both a slash and a fragment
 // marker. Consumers post the href from the item rather than building it.
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")

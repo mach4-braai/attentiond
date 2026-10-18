@@ -47,7 +47,7 @@ func TestLoadOnlyChangesWhatTheFileSays(t *testing.T) {
 addr = "127.0.0.1:9000"
 
 [github]
-orgs = ["didx-xyz", "mach4-braai"]
+orgs = ["example-org", "mach4-braai"]
 poll = "5m"
 `)
 
@@ -213,7 +213,7 @@ func TestGitHubIsOffUntilAFileTurnsItOn(t *testing.T) {
 		t.Error("an unconfigured daemon would watch every repository the token can see")
 	}
 
-	cfg, _, err := Load(write(t, "[github]\nenabled = true\norgs = [\"didx-xyz\"]\n"), true)
+	cfg, _, err := Load(write(t, "[github]\nenabled = true\norgs = [\"example-org\"]\n"), true)
 	if err != nil {
 		t.Fatal(err)
 	}

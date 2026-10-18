@@ -32,7 +32,7 @@ func TestCommentsKeepOnlyAllowlistedHumans(t *testing.T) {
 	server, requests := recordingServer(t, commentsBody)
 
 	comments, err := NewClient(server.URL, "t0ken", 5*time.Second).
-		Comments(context.Background(), "didx-xyz/tofu", 42, []string{"alice", "bob", "copilot"})
+		Comments(context.Background(), "example-org/infra", 42, []string{"alice", "bob", "copilot"})
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestCommentsKeepOnlyAllowlistedHumans(t *testing.T) {
 	}
 
 	vars := (*requests)[0].Variables
-	if vars["owner"] != "didx-xyz" || vars["name"] != "tofu" || vars["number"] != float64(42) {
+	if vars["owner"] != "example-org" || vars["name"] != "infra" || vars["number"] != float64(42) {
 		t.Errorf("variables = %v", vars)
 	}
 }
@@ -68,7 +68,7 @@ func TestCommentsKeepOnlyAllowlistedHumans(t *testing.T) {
 func TestCommentsWithNoAllowlistPassNobody(t *testing.T) {
 	server, _ := recordingServer(t, commentsBody)
 	comments, err := NewClient(server.URL, "t0ken", 5*time.Second).
-		Comments(context.Background(), "didx-xyz/tofu", 42, nil)
+		Comments(context.Background(), "example-org/infra", 42, nil)
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}

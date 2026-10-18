@@ -21,29 +21,29 @@ func TestWatchSurvivesARestartBesideASnooze(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "decisions.json")
 
 	first := testStore(t, StoreConfig{DecisionPath: path}, &now)
-	first.ReplaceSource("github", []Item{authored("didx-xyz/tofu#1", "rebase required")})
-	if _, err := first.Watch("github:didx-xyz/tofu#1"); err != nil {
+	first.ReplaceSource("github", []Item{authored("example-org/infra#1", "rebase required")})
+	if _, err := first.Watch("github:example-org/infra#1"); err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	if _, err := first.Decide("github:didx-xyz/tofu#1", DecisionSnooze, now.Add(4*time.Hour)); err != nil {
+	if _, err := first.Decide("github:example-org/infra#1", DecisionSnooze, now.Add(4*time.Hour)); err != nil {
 		t.Fatalf("snooze: %v", err)
 	}
 
 	now = now.Add(time.Minute)
 	second := testStore(t, StoreConfig{DecisionPath: path}, &now)
-	second.ReplaceSource("github", []Item{authored("didx-xyz/tofu#1", "rebase required")})
+	second.ReplaceSource("github", []Item{authored("example-org/infra#1", "rebase required")})
 
-	item, ok := second.Get("github:didx-xyz/tofu#1")
+	item, ok := second.Get("github:example-org/infra#1")
 	if !ok || !item.Watched || !item.Snoozed {
 		t.Fatalf("watch and snooze did not both survive the restart: %+v", item)
 	}
 
-	if _, err := second.Unwatch("github:didx-xyz/tofu#1"); err != nil {
+	if _, err := second.Unwatch("github:example-org/infra#1"); err != nil {
 		t.Fatalf("unwatch: %v", err)
 	}
 	third := testStore(t, StoreConfig{DecisionPath: path}, &now)
-	third.ReplaceSource("github", []Item{authored("didx-xyz/tofu#1", "rebase required")})
-	if item, _ := third.Get("github:didx-xyz/tofu#1"); item.Watched || !item.Snoozed {
+	third.ReplaceSource("github", []Item{authored("example-org/infra#1", "rebase required")})
+	if item, _ := third.Get("github:example-org/infra#1"); item.Watched || !item.Snoozed {
 		t.Fatalf("unwatch did not reach the file, or took the snooze with it: %+v", item)
 	}
 }
@@ -51,7 +51,7 @@ func TestWatchSurvivesARestartBesideASnooze(t *testing.T) {
 func TestAVersionOneDecisionsFileStillLoads(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "decisions.json")
-	old := `{"version":1,"decisions":[{"item":"github:didx-xyz/tofu#1","kind":"bump","label":"review requested","made_at":"2026-09-12T09:00:00Z"}]}`
+	old := `{"version":1,"decisions":[{"item":"github:example-org/infra#1","kind":"bump","label":"review requested","made_at":"2026-09-12T09:00:00Z"}]}`
 	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +71,10 @@ func TestAWatchOnWorkThatStoppedAppearingIsDroppedAtLoad(t *testing.T) {
 
 	store := testStore(t, StoreConfig{DecisionPath: path}, &now)
 	store.ReplaceSource("github", []Item{
-		authored("didx-xyz/tofu#1", "awaiting review"),
-		authored("didx-xyz/tofu#2", "awaiting review"),
+		authored("example-org/infra#1", "awaiting review"),
+		authored("example-org/infra#2", "awaiting review"),
 	})
-	for _, key := range []string{"github:didx-xyz/tofu#1", "github:didx-xyz/tofu#2"} {
+	for _, key := range []string{"github:example-org/infra#1", "github:example-org/infra#2"} {
 		if _, err := store.Watch(key); err != nil {
 			t.Fatalf("watch %s: %v", key, err)
 		}
@@ -83,12 +83,12 @@ func TestAWatchOnWorkThatStoppedAppearingIsDroppedAtLoad(t *testing.T) {
 	// #1 merges and leaves the poll; #2 keeps being reported for weeks.
 	for range 20 {
 		now = now.Add(24 * time.Hour)
-		store.ReplaceSource("github", []Item{authored("didx-xyz/tofu#2", "awaiting review")})
+		store.ReplaceSource("github", []Item{authored("example-org/infra#2", "awaiting review")})
 	}
 
 	restarted := testStore(t, StoreConfig{DecisionPath: path}, &now)
 	watches := restarted.Watches()
-	if len(watches) != 1 || watches[0].Item != "github:didx-xyz/tofu#2" {
+	if len(watches) != 1 || watches[0].Item != "github:example-org/infra#2" {
 		t.Fatalf("watches after the restart = %+v, want only the pull request still polled", watches)
 	}
 }
