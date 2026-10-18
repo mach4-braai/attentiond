@@ -141,8 +141,8 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 
 // firstSighting is the log entry for an item the store did not hold. After a
 // restart the log's newest entry for the item says what the log already
-// knows: the same state and label logs nothing (the zero entry), a different
-// one logs a change from it, and no entry or a disappearance logs an
+// knows: the same state, label, title and severity logs nothing (the zero
+// entry), a different one logs a change from it, and no entry or a disappearance logs an
 // appearance. It assumes the lock is held, and each restored entry is used
 // once.
 func (s *Store) firstSighting(next Item) SignalEntry {
@@ -152,10 +152,17 @@ func (s *Store) firstSighting(next Item) SignalEntry {
 		return signalEntry(s.now(), SignalAppeared, next)
 	}
 	entry := signalEntry(s.now(), SignalChanged, next)
-	if last.State == entry.State && last.Label == entry.Label {
+	if last.State == entry.State && last.Label == entry.Label &&
+		last.Title == entry.Title && last.Severity == entry.Severity {
 		return SignalEntry{}
 	}
 	entry.PrevState, entry.PrevLabel = last.State, last.Label
+	if last.Severity != entry.Severity {
+		entry.PrevSeverity = last.Severity
+	}
+	if last.Title != entry.Title {
+		entry.PrevTitle = last.Title
+	}
 	return entry
 }
 
@@ -539,14 +546,14 @@ func (s *Store) record(transitions []Transition, prev Item, existed bool, next I
 			"from", transitionWord(prev), "to", transitionWord(next),
 			"severity", string(next.Severity), "title", next.Title)
 	default:
+		if existed && changed(prev, next) {
+			s.signal(changeEntry(s.now(), prev, next))
+		}
 		return transitions
 	}
-	switch {
-	case existed:
-		entry := signalEntry(s.now(), SignalChanged, next)
-		entry.PrevState, entry.PrevLabel = string(prev.State), transitionWord(prev)
-		s.signal(entry)
-	default:
+	if existed {
+		s.signal(changeEntry(s.now(), prev, next))
+	} else {
 		s.signal(s.firstSighting(next))
 	}
 	return s.transition(transitions, prev, existed, next)

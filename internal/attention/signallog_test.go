@@ -72,14 +72,12 @@ func TestSignalLogRecordsAppearedChangedAndDisappeared(t *testing.T) {
 	}
 }
 
-func TestSignalLogIgnoresPollsThatChangeNothingAndOtherFields(t *testing.T) {
+func TestSignalLogIgnoresPollsThatChangeNothing(t *testing.T) {
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 	store := logStore(t, filepath.Join(t.TempDir(), "signals.jsonl"), 0, &now)
 
 	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
 	store.ReplaceSource("herdr", []Item{item})
-	store.ReplaceSource("herdr", []Item{item})
-	item.Title = "claude renamed"
 	store.ReplaceSource("herdr", []Item{item})
 
 	entries, err := store.Signals(time.Time{}, 0)
@@ -87,7 +85,61 @@ func TestSignalLogIgnoresPollsThatChangeNothingAndOtherFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 || entries[0].Kind != SignalAppeared {
-		t.Fatalf("entries = %v, want only the appearance: a title change keeps state and label", kinds(entries))
+		t.Fatalf("entries = %v, want only the appearance", kinds(entries))
+	}
+}
+
+func TestSeverityOnlyChangeLogsOneChangedEntryWithPrevSeverity(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	store := logStore(t, filepath.Join(t.TempDir(), "signals.jsonl"), 0, &now)
+
+	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
+	store.ReplaceSource("herdr", []Item{item})
+	item.Severity = SeverityWarning
+	store.ReplaceSource("herdr", []Item{item})
+
+	entries, _ := store.Signals(time.Time{}, 0)
+	if got := strings.Join(kinds(entries), ","); got != "changed,appeared" {
+		t.Fatalf("kinds = %s", got)
+	}
+	if e := entries[0]; e.Severity != "warning" || e.PrevSeverity != "info" || e.PrevTitle != "" {
+		t.Fatalf("changed = %+v", e)
+	}
+}
+
+func TestTitleOnlyChangeLogsOneChangedEntryWithPrevTitle(t *testing.T) {
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	store := logStore(t, filepath.Join(t.TempDir(), "signals.jsonl"), 0, &now)
+
+	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
+	store.ReplaceSource("herdr", []Item{item})
+	item.Title = "claude renamed"
+	store.ReplaceSource("herdr", []Item{item})
+
+	entries, _ := store.Signals(time.Time{}, 0)
+	if got := strings.Join(kinds(entries), ","); got != "changed,appeared" {
+		t.Fatalf("kinds = %s", got)
+	}
+	if e := entries[0]; e.Title != "claude renamed" || e.PrevTitle != "claude" || e.PrevSeverity != "" {
+		t.Fatalf("changed = %+v", e)
+	}
+}
+
+func TestRestartWithADifferentSeverityLogsChanged(t *testing.T) {
+	path, now := restartLog(t)
+	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
+	logStore(t, path, 0, now).ReplaceSource("herdr", []Item{item})
+
+	item.Severity = SeverityWarning
+	second := logStore(t, path, 0, now)
+	second.ReplaceSource("herdr", []Item{item})
+
+	entries, _ := second.Signals(time.Time{}, 0)
+	if got := strings.Join(kinds(entries), ","); got != "changed,appeared" {
+		t.Fatalf("kinds = %s", got)
+	}
+	if e := entries[0]; e.PrevSeverity != "info" || e.Severity != "warning" {
+		t.Fatalf("changed = %+v", e)
 	}
 }
 

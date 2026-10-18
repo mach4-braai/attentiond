@@ -41,6 +41,25 @@ type SignalEntry struct {
 	Severity  string    `json:"severity"`
 	PrevState string    `json:"prev_state,omitempty"`
 	PrevLabel string    `json:"prev_label,omitempty"`
+	// PrevSeverity and PrevTitle are set only when they differ from the
+	// previous reading.
+	PrevSeverity string `json:"prev_severity,omitempty"`
+	PrevTitle    string `json:"prev_title,omitempty"`
+}
+
+// changeEntry is the log entry for an item that moved from prev to next.
+// PrevState and PrevLabel always say where it was; PrevSeverity and
+// PrevTitle appear only when they differ.
+func changeEntry(at time.Time, prev, next Item) SignalEntry {
+	entry := signalEntry(at, SignalChanged, next)
+	entry.PrevState, entry.PrevLabel = string(prev.State), transitionWord(prev)
+	if prev.Severity != next.Severity {
+		entry.PrevSeverity = string(prev.Severity)
+	}
+	if prev.Title != next.Title {
+		entry.PrevTitle = prev.Title
+	}
+	return entry
 }
 
 // signalEntry describes an item at one moment, without a previous reading.
