@@ -280,3 +280,80 @@ func TestSignalLogWithZeroRetentionKeepsEverything(t *testing.T) {
 		t.Fatalf("ids = %s, want everything kept", got)
 	}
 }
+
+func restartLog(t *testing.T) (string, *time.Time) {
+	t.Helper()
+	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	return filepath.Join(t.TempDir(), "signals.jsonl"), &now
+}
+
+func TestRestartWithTheSameItemLogsNothing(t *testing.T) {
+	path, now := restartLog(t)
+	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
+	logStore(t, path, 0, now).ReplaceSource("herdr", []Item{item})
+
+	*now = now.Add(time.Minute)
+	second := logStore(t, path, 0, now)
+	second.ReplaceSource("herdr", []Item{item})
+
+	entries, err := second.Signals(time.Time{}, 0)
+	if err != nil || len(entries) != 1 || entries[0].Kind != SignalAppeared {
+		t.Fatalf("entries = %v, err = %v, want only the original appearance", kinds(entries), err)
+	}
+}
+
+func TestRestartWithAChangedLabelLogsOneChangeFromTheLoggedLabel(t *testing.T) {
+	path, now := restartLog(t)
+	first := logStore(t, path, 0, now)
+	first.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")})
+
+	*now = now.Add(time.Minute)
+	second := logStore(t, path, 0, now)
+	second.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateNeedsAttention, SeverityWarning, "claude")})
+	second.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateNeedsAttention, SeverityWarning, "claude")})
+
+	entries, err := second.Signals(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(kinds(entries), ","); got != "changed,appeared" {
+		t.Fatalf("kinds = %s, want changed,appeared", got)
+	}
+	if entries[0].PrevState != "working" || entries[0].PrevLabel != entries[1].Label || entries[0].State != "needs_attention" {
+		t.Fatalf("changed = %+v, appeared = %+v", entries[0], entries[1])
+	}
+}
+
+func TestAnItemThatDisappearedBeforeTheRestartLogsAppeared(t *testing.T) {
+	path, now := restartLog(t)
+	item := adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")
+	first := logStore(t, path, 0, now)
+	first.ReplaceSource("herdr", []Item{item})
+	first.ReplaceSource("herdr", nil)
+
+	*now = now.Add(time.Minute)
+	second := logStore(t, path, 0, now)
+	second.ReplaceSource("herdr", []Item{item})
+
+	entries, err := second.Signals(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(kinds(entries), ","); got != "appeared,disappeared,appeared" {
+		t.Fatalf("kinds = %s, want appeared,disappeared,appeared", got)
+	}
+}
+
+func TestRestartLeavesItemsThatNeverCameBackAlone(t *testing.T) {
+	path, now := restartLog(t)
+	first := logStore(t, path, 0, now)
+	first.ReplaceSource("herdr", []Item{adapterItem("w1:p1", StateWorking, SeverityInfo, "claude")})
+
+	second := logStore(t, path, 0, now)
+	second.ReplaceSource("herdr", nil)
+
+	entries, _ := second.Signals(time.Time{}, 0)
+	if len(entries) != 1 {
+		t.Fatalf("kinds = %v, want no inferred disappearance", kinds(entries))
+	}
+}

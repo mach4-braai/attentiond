@@ -243,3 +243,16 @@ func (s *Store) Signals(since time.Time, limit int) ([]SignalEntry, error) {
 	}
 	return entries, nil
 }
+
+// lastByItem maps each item id in the file to its newest entry. File order is
+// write order, so the last line for an id wins.
+func (l *signalLog) lastByItem() (map[string]SignalEntry, error) {
+	out := map[string]SignalEntry{}
+	l.mu.Lock()
+	entries, err := readSignals(l.path)
+	l.mu.Unlock()
+	for _, entry := range entries {
+		out[entry.ItemID] = entry
+	}
+	return out, err
+}

@@ -98,6 +98,9 @@ type Store struct {
 	// pending holds entries queued under mu that flushSignals has yet to
 	// write.
 	pending []SignalEntry
+	// restored is the newest log entry per item at start, for the first
+	// time a source reports each item.
+	restored map[string]SignalEntry
 }
 
 // NewStore returns a store holding the decisions an earlier run left behind.
@@ -127,8 +130,33 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 	}
 	if cfg.SignalLogPath != "" {
 		store.signals = &signalLog{path: cfg.SignalLogPath, retention: cfg.SignalRetention, now: now}
+		last, err := store.signals.lastByItem()
+		if err != nil {
+			log.Warn("signal log not read at start", "path", cfg.SignalLogPath, "error", err)
+		}
+		store.restored = last
 	}
 	return store
+}
+
+// firstSighting is the log entry for an item the store did not hold. After a
+// restart the log's newest entry for the item says what the log already
+// knows: the same state and label logs nothing (the zero entry), a different
+// one logs a change from it, and no entry or a disappearance logs an
+// appearance. It assumes the lock is held, and each restored entry is used
+// once.
+func (s *Store) firstSighting(next Item) SignalEntry {
+	last, ok := s.restored[next.ID]
+	delete(s.restored, next.ID)
+	if !ok || last.Kind == SignalDisappeared {
+		return signalEntry(s.now(), SignalAppeared, next)
+	}
+	entry := signalEntry(s.now(), SignalChanged, next)
+	if last.State == entry.State && last.Label == entry.Label {
+		return SignalEntry{}
+	}
+	entry.PrevState, entry.PrevLabel = last.State, last.Label
+	return entry
 }
 
 // ReplaceSource swaps the full set of items owned by one adapter. Items the
@@ -513,12 +541,13 @@ func (s *Store) record(transitions []Transition, prev Item, existed bool, next I
 	default:
 		return transitions
 	}
-	if existed {
+	switch {
+	case existed:
 		entry := signalEntry(s.now(), SignalChanged, next)
 		entry.PrevState, entry.PrevLabel = string(prev.State), transitionWord(prev)
 		s.signal(entry)
-	} else {
-		s.signal(signalEntry(s.now(), SignalAppeared, next))
+	default:
+		s.signal(s.firstSighting(next))
 	}
 	return s.transition(transitions, prev, existed, next)
 }
@@ -556,7 +585,7 @@ func (s *Store) observe(transitions []Transition) {
 // signal queues one entry for the signal log. It assumes the lock is held;
 // flushSignals writes the queue once the lock is free.
 func (s *Store) signal(entry SignalEntry) {
-	if s.signals == nil {
+	if s.signals == nil || entry.Kind == "" {
 		return
 	}
 	s.pending = append(s.pending, entry)
