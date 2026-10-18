@@ -1,0 +1,19 @@
+# Headless omp refuses any bash command not allowed here. First match wins.
+tools:
+  approvalMode: write
+bash:
+  allowCompoundCommands: true
+  patterns:
+    - { match: "git push*", approval: deny }
+    - { match: "git rebase --skip*", approval: deny }
+    - { match: "git fetch origin *", approval: allow }
+    - { match: "git merge-base --is-ancestor *", approval: allow }
+    - { match: "git rev-parse *", approval: allow }
+    - { match: "git status*", approval: allow }
+    - { match: "git diff*", approval: allow }
+    - { match: "git log*", approval: allow }
+    - { match: "git show *", approval: allow }
+    - { match: "git add *", approval: allow }
+    - { match: "git rebase --continue", approval: allow }
+    - { match: "git rebase --abort", approval: allow }
+    - { match: "git rebase [0-9a-f]*", approval: allow }
