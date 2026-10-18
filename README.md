@@ -677,4 +677,11 @@ when nothing is old enough to drop. Zero keeps everything. A line that does
 not parse, such as one torn by a crash, is skipped when reading and dropped by
 the next rewrite.
 
+A restart does not repeat what the log already says. When a source first
+reports an item after a start, attentiond compares it with the item's newest
+entry. The same state and label logs nothing, a different one logs `changed`
+from that entry, and no entry or a `disappeared` entry logs `appeared`. An
+item in the log that a source never reports again is left alone, because the
+source may only be slow.
+
 A failed write is logged as a warning and dropped. The daemon keeps running.
