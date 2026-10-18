@@ -9,17 +9,25 @@ import (
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
+	"github.com/devanmcgeer/attentiond/internal/github"
 )
 
 // Decisions a human can make about one item, as the last path segment of
 // POST /api/items/{key}/{decision}.
 const (
-	decisionSnooze = "snooze"
-	decisionBump   = "bump"
-	decisionClear  = "clear"
+	decisionSnooze  = "snooze"
+	decisionBump    = "bump"
+	decisionClear   = "clear"
+	decisionWatch   = "watch"
+	decisionUnwatch = "unwatch"
 )
 
-// decide records a snooze, a bump, or the removal of either.
+// agentHeader must accompany watch and unwatch. A custom header makes a
+// browser send a CORS preflight, which attentiond never answers, so another
+// website cannot start agents through the browser of the human using it.
+const agentHeader = "X-Attentiond"
+
+// decide records a snooze, a bump, a watch, or the removal of one.
 //
 // The key is the whole item id, percent-encoded: a GitHub item is
 // "github:didx-xyz/tofu#42", which contains both a slash and a fragment
@@ -27,6 +35,11 @@ const (
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	decision := r.PathValue("decision")
+
+	if (decision == decisionWatch || decision == decisionUnwatch) && r.Header.Get(agentHeader) != "1" {
+		writeError(w, http.StatusForbidden, decision+" needs the header "+agentHeader+": 1")
+		return
+	}
 
 	var (
 		item attention.Item
@@ -45,10 +58,19 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		item, err = s.cfg.Store.Decide(key, attention.DecisionBump, time.Time{})
 	case decisionClear:
 		item, err = s.cfg.Store.Clear(key)
+	case decisionWatch:
+		current, ok := s.cfg.Store.Get(key)
+		if ok && !watchable(current) {
+			writeError(w, http.StatusBadRequest, "only a pull request you authored can be watched")
+			return
+		}
+		item, err = s.cfg.Store.Watch(key)
+	case decisionUnwatch:
+		item, err = s.cfg.Store.Unwatch(key)
 	default:
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"unknown decision %q: want %s, %s or %s",
-			decision, decisionSnooze, decisionBump, decisionClear))
+			"unknown decision %q: want %s, %s, %s, %s or %s",
+			decision, decisionSnooze, decisionBump, decisionClear, decisionWatch, decisionUnwatch))
 		return
 	}
 
@@ -62,6 +84,12 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, s.decorate(item))
+}
+
+// watchable reports whether attentiond may run tools on an item: a GitHub pull
+// request you authored. Anybody else's branch is not yours to push to.
+func watchable(item attention.Item) bool {
+	return item.Source == github.SourceName && item.Context["role"] == "author"
 }
 
 // snoozeUntil reads the optional ?for= override. "0" is the open-ended snooze:
@@ -95,7 +123,7 @@ func (s *server) decorate(item attention.Item) attention.Item {
 
 	// A fresh slice: the stored item's Actions belongs to the store, and
 	// appending to it would write into state a poll is still reading.
-	actions := make([]attention.Action, 0, len(item.Actions)+2)
+	actions := make([]attention.Action, 0, len(item.Actions)+3)
 	actions = append(actions, item.Actions...)
 
 	if item.Snoozed {
@@ -118,6 +146,19 @@ func (s *server) decorate(item attention.Item) attention.Item {
 	} else {
 		actions = append(actions, attention.Action{
 			ID: "bump", Label: "Bump", Method: "POST", Href: base + "/" + decisionBump,
+		})
+	}
+
+	// Unwatch stays on offer even if the item stopped qualifying, so a watch
+	// can always be taken back.
+	switch {
+	case item.Watched:
+		actions = append(actions, attention.Action{
+			ID: "unwatch", Label: "Unwatch", Method: "POST", Href: base + "/" + decisionUnwatch,
+		})
+	case watchable(item):
+		actions = append(actions, attention.Action{
+			ID: "watch", Label: "Watch", Method: "POST", Href: base + "/" + decisionWatch,
 		})
 	}
 

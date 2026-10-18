@@ -31,8 +31,9 @@ addr = "127.0.0.1:7717"
 log_level = "info"   # debug, info, warn, error
 log_format = "text"  # text or json
 
-# Where snoozes and bumps are kept so they survive a restart. Empty resolves to
-# $XDG_STATE_HOME/attentiond/decisions.json, beside the pid and the log.
+# Where snoozes, bumps and watches are kept so they survive a restart. Empty
+# resolves to $XDG_STATE_HOME/attentiond/decisions.json, beside the pid and the
+# log.
 #
 # Items are not in it. Every source rebuilds those within a poll; no source can
 # rebuild the fact that you decided to leave something until Monday.

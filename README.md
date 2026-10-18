@@ -264,12 +264,13 @@ item on one day, so it goes above.
 Both are resolved before the queue is sorted, so the `priority` a consumer
 reads is the one it was ordered by. Matching folds case and surrounding space.
 
-Three fields carry what a human decided rather than what a source observed:
+These fields carry what a human decided rather than what a source observed:
 
 | Field | What it means |
 | --- | --- |
 | `snoozed`, `snoozed_until` | deferred; out of `/api/attention`, still on the board. No `snoozed_until` means it lasts until the label changes |
 | `bumped` | raised to 110 by hand, and exempt from going stale |
+| `watched` | a pull request you authored that attentiond may act on |
 | `stale` | nothing has happened to it for longer than `stale_after`; served only by `/api/stale` |
 
 `attention` is derived from `state`, so a consumer never has to restate the
@@ -356,6 +357,27 @@ Decisions are written to `[daemon] state_file` as they are made and reloaded at
 startup, expired snoozes dropped. Items are not persisted; every source rebuilds
 those within a poll, and no source can rebuild a decision you made. A file that
 cannot be read costs a warning rather than the daemon.
+
+`watch` and `unwatch` mark a pull request you authored as one attentiond may
+act on. They sit beside the decision rather than replacing it, so a watched
+pull request can still be snoozed or bumped, and `clear` leaves the watch
+alone. Both need the request header `X-Attentiond: 1` and answer `403` without
+it:
+
+```bash
+curl -sS -X POST -H 'X-Attentiond: 1' \
+  'localhost:7717/api/items/github:didx-xyz%2Ftofu%2342/watch'
+```
+
+A custom header makes a browser send a CORS preflight first, and attentiond
+never answers one, so a web page you happen to have open cannot start agents
+on your branches. Watch answers `400` for anything but a GitHub pull request
+with `context.role` of `author`. Items that qualify carry a `watch` action, and
+watched ones an `unwatch` action.
+
+Watches are kept in the same file. A watch whose pull request has not been
+reported for 14 days is dropped at the next start: GitHub only reports open
+pull requests, so that is a pull request that merged or closed.
 
 ### `GET /health`
 
@@ -650,7 +672,7 @@ a restart, GitHub items within a minute, spend items within one `[spend]` poll,
 and event items are lost, which is the one real cost and is acceptable while
 the producers are builds and tests someone is watching.
 
-Snoozes and bumps are on disk, in `[daemon] state_file`. They are the only
+Snoozes, bumps and watches are on disk, in `[daemon] state_file`. They are the only
 state here that no source can reproduce: GitHub knows whether a pull request is
 mergeable, and nothing but this file knows you decided to leave it until
 Monday. See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning
