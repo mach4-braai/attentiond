@@ -72,44 +72,78 @@ func (d Decision) spent(now time.Time, label string) bool {
 	return false
 }
 
+// Watch is a human asking attentiond to act on one item: run tools on a pull
+// request when it falls into conflict or collects review comments. It is kept
+// beside decisions rather than as one, because a watched pull request can also
+// be snoozed or bumped.
+type Watch struct {
+	Item   string    `json:"item"`
+	MadeAt time.Time `json:"made_at"`
+	// SeenAt is when a source last reported the item, to within seenEvery.
+	SeenAt time.Time `json:"seen_at"`
+}
+
+// watchTTL is how long a watched item can go unreported before its watch is
+// dropped at load. GitHub only reports open pull requests, so this is how a
+// watch ends once its pull request merges or closes.
+const watchTTL = 14 * 24 * time.Hour
+
+// seenEvery is how far SeenAt may lag behind the last poll. Writing the file on
+// every poll to move a timestamp measured in weeks would be churn.
+const seenEvery = 24 * time.Hour
+
+// state is everything the store keeps on disk.
+type state struct {
+	decisions map[string]Decision
+	watches   map[string]Watch
+}
+
+func emptyState() state {
+	return state{decisions: map[string]Decision{}, watches: map[string]Watch{}}
+}
+
 // decisionFile is the on-disk form: a version and a list, so a future field
-// arrives without guessing at what an older file meant.
+// arrives without guessing at what an older file meant. Version 1 had no
+// watches and still loads.
 type decisionFile struct {
 	Version   int        `json:"version"`
 	Decisions []Decision `json:"decisions"`
+	Watches   []Watch    `json:"watches,omitempty"`
 }
 
-const decisionFileVersion = 1
+const decisionFileVersion = 2
 
-// loadDecisions reads the decisions written by an earlier run. A missing file
-// is an empty set: no decisions yet is the normal state of a new machine.
+// loadState reads the decisions and watches written by an earlier run. A
+// missing file is an empty set: no decisions yet is the normal state of a new
+// machine.
 //
 // Expired snoozes are dropped here rather than being carried in memory for the
 // life of the process. Decisions about items that never come back cost one map
 // entry each and are cleared the first time their item is seen again, so they
 // are left alone: a pull request absent from one poll because GitHub timed out
-// is not a reason to forget you deferred it.
-func loadDecisions(path string, now time.Time) (map[string]Decision, error) {
+// is not a reason to forget you deferred it. A watch is the exception, dropped
+// once its item has been gone for watchTTL.
+func loadState(path string, now time.Time) (state, error) {
+	out := emptyState()
 	if path == "" {
-		return map[string]Decision{}, nil
+		return out, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]Decision{}, nil
+			return out, nil
 		}
-		return nil, err
+		return state{}, err
 	}
 
 	var file decisionFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return state{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if file.Version != decisionFileVersion {
-		return nil, fmt.Errorf("%s: version %d, want %d", path, file.Version, decisionFileVersion)
+	if file.Version != 1 && file.Version != decisionFileVersion {
+		return state{}, fmt.Errorf("%s: version %d, want 1 or %d", path, file.Version, decisionFileVersion)
 	}
 
-	out := make(map[string]Decision, len(file.Decisions))
 	for _, decision := range file.Decisions {
 		if decision.Item == "" {
 			continue
@@ -120,14 +154,20 @@ func loadDecisions(path string, now time.Time) (map[string]Decision, error) {
 		if decision.Kind == DecisionSnooze && decision.Until != nil && !now.Before(*decision.Until) {
 			continue
 		}
-		out[decision.Item] = decision
+		out.decisions[decision.Item] = decision
+	}
+	for _, watch := range file.Watches {
+		if watch.Item == "" || now.Sub(watch.SeenAt) > watchTTL {
+			continue
+		}
+		out.watches[watch.Item] = watch
 	}
 	return out, nil
 }
 
-// saveDecisions writes the set through a temporary file and a rename, so a
-// crash mid-write leaves the previous file rather than half of this one.
-func saveDecisions(path string, decisions map[string]Decision) error {
+// saveState writes the set through a temporary file and a rename, so a crash
+// mid-write leaves the previous file rather than half of this one.
+func saveState(path string, saved state) error {
 	if path == "" {
 		return nil
 	}
@@ -135,14 +175,20 @@ func saveDecisions(path string, decisions map[string]Decision) error {
 		return err
 	}
 
-	file := decisionFile{Version: decisionFileVersion, Decisions: make([]Decision, 0, len(decisions))}
-	for _, decision := range decisions {
+	file := decisionFile{Version: decisionFileVersion, Decisions: make([]Decision, 0, len(saved.decisions))}
+	for _, decision := range saved.decisions {
 		file.Decisions = append(file.Decisions, decision)
+	}
+	for _, watch := range saved.watches {
+		file.Watches = append(file.Watches, watch)
 	}
 	// Sorted so that a file a human opens reads the same way twice, and so a
 	// diff of it shows what changed rather than what moved.
 	sort.Slice(file.Decisions, func(a, b int) bool {
 		return file.Decisions[a].Item < file.Decisions[b].Item
+	})
+	sort.Slice(file.Watches, func(a, b int) bool {
+		return file.Watches[a].Item < file.Watches[b].Item
 	})
 
 	data, err := json.MarshalIndent(file, "", "  ")
