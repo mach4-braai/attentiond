@@ -226,6 +226,9 @@ type Item struct {
 	// Watched reports that a human asked attentiond to act on this pull
 	// request: rebase it when it conflicts and answer review comments.
 	Watched bool `json:"watched,omitempty"`
+	// Job is the latest tool run on this item, until the next one starts or
+	// a human dismisses a finished one.
+	Job *Job `json:"job,omitempty"`
 	// Stale reports that nothing has happened to this item for longer than
 	// [attention] stale_after. It is served by /api/stale and by nothing
 	// else: a month-old pull request is archaeology, and leaving it on the

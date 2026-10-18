@@ -52,6 +52,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/work", s.work)
 	mux.HandleFunc("GET /api/attention", s.attention)
 	mux.HandleFunc("GET /api/stale", s.stale)
+	mux.HandleFunc("GET /api/jobs", s.jobs)
 	mux.HandleFunc("POST /api/events", s.ingestEvent)
 	mux.HandleFunc("POST /api/actions/{source}/{kind}/{target}/{action}", s.runAction)
 	mux.HandleFunc("POST /api/items/{key}/{decision}", s.decide)
@@ -136,6 +137,29 @@ func (s *server) stale(w http.ResponseWriter, r *http.Request) {
 		Warnings:    s.warnings(),
 		Items:       items,
 	})
+}
+
+// jobs serves the items a tool is working on or has reported on, newest job
+// first. Stale items are included: a tool finishing on a quiet pull request
+// still has something to say.
+func (s *server) jobs(w http.ResponseWriter, r *http.Request) {
+	all := s.cfg.Store.JobItems()
+	response := listResponse{
+		GeneratedAt: time.Now().UTC(),
+		Count:       len(all),
+		Warnings:    s.warnings(),
+		Items:       make([]attention.Item, 0, len(all)),
+	}
+	for _, item := range all {
+		switch {
+		case item.Stale:
+			response.StaleCount++
+		case item.State.NeedsAttention() && !item.Snoozed:
+			response.AttentionCount++
+		}
+		response.Items = append(response.Items, s.decorate(item))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 type healthResponse struct {

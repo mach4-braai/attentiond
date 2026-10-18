@@ -19,3 +19,8 @@ var (
 // about a live item, so this is the answer to snoozing something that has
 // already been merged, closed or dropped by its source.
 var ErrItemMissing = errors.New("item not found")
+
+// ErrJobMissing means a job change arrived for an item with no job in the
+// state it needs: starting one that is not queued, or finishing one that is
+// not pending.
+var ErrJobMissing = errors.New("job not found")
