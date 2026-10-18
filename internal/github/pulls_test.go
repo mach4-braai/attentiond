@@ -314,7 +314,7 @@ func TestAReviewRequestRanksByWhoElseCanAnswerIt(t *testing.T) {
 
 	for _, tc := range cases {
 		for repo, want := range map[string]int{
-			"example-org/infra":       tc.inPriority,
+			"example-org/infra":   tc.inPriority,
 			"mcgeerdev/portfolio": tc.elsewhere,
 		} {
 			t.Run(tc.name+" in "+repo, func(t *testing.T) {
