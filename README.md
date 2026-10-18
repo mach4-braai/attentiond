@@ -363,6 +363,11 @@ curl -sS 'localhost:7717/api/log?since=2026-09-12T10:00:00Z&limit=50'
 }
 ```
 
+Each entry has `at`, `kind`, `item_id`, `source`, `title`, `state`, `label` and
+`severity`. A `changed` entry adds `prev_state` and `prev_label`, plus
+`prev_severity` and `prev_title` when those differ. `appeared` and
+`disappeared` entries carry no `prev_*` fields.
+
 A `since` or `limit` that does not parse answers `400` with `{"error": "..."}`.
 With no log file yet, `entries` is an empty array. See
 [The signal log](#the-signal-log) for what an entry means.
@@ -662,8 +667,10 @@ new state or label, or disappears. Each line is a self-contained object:
 `kind` is `appeared`, `changed` or `disappeared`. `state`, `label` and
 `severity` describe the item after the change, or the last thing attentiond
 knew when it disappeared. `prev_state` and `prev_label` appear only on
-`changed`. A change is a move in `state` or `label`; a new title or severity
-alone is not one. An item disappears when its source stops reporting it or an
+`changed`. `prev_severity` and `prev_title` appear only on `changed`, and only
+when that field differs. A change is a move in `state`, `label`, `title` or
+`severity`, so a severity escalation or a title edit alone writes an entry.
+An item disappears when its source stops reporting it or an
 event item passes `[events] ttl`.
 
 The file is `[log] path`, default `$XDG_STATE_HOME/attentiond/signals.jsonl`
