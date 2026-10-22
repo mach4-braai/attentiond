@@ -234,3 +234,31 @@ app_key_env = "DD_APP_KEY"
 # needs no keys:
 #   fixture = "testdata/datadog-findings.json"
 # fixture = ""
+
+[outline]
+# Unread mentions of you in Outline, each one an item labelled "mentioned you".
+# attentiond only reads: it never marks a notification read or archived. Off by
+# default: it reaches the network and needs an API key.
+enabled = false
+
+# The origin of your Outline instance, self-hosted or hosted. Required when
+# enabled, unless a fixture is set.
+base_url = "https://app.getoutline.com"
+
+# How often to ask for notifications.
+poll = "5m"
+
+# The most mentions one poll keeps. Pages of 100 are fetched until this many
+# are found or the notifications run out.
+max_items = 100
+
+# The environment variable holding the API key (Settings, API & Apps in
+# Outline). Never put a key in this file. The key needs the notifications.list
+# and documents.info scopes. With the variable empty the source stays off and
+# startup says so.
+token_env = "OUTLINE_API_KEY"
+
+# Replay a recorded notifications.list response instead of calling the API.
+# Read on every poll and needs no key:
+#   fixture = "testdata/outline-notifications.json"
+# fixture = ""
