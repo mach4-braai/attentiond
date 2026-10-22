@@ -8,11 +8,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/devanmcgeer/attentiond/internal/attention"
@@ -65,30 +69,66 @@ func Scan(dirs []Dir) ([]attention.Item, []Problem) {
 				continue
 			}
 			path := filepath.Join(dir.Path, name)
-			info, err := os.Stat(path) // follows a symlink to a file
-			if err != nil || !info.Mode().IsRegular() {
+			raw, mtime, status, err := readNote(path)
+			switch status {
+			case readSkip:
 				continue
-			}
-			if info.Size() > MaxSize {
+			case readTooBig:
 				problems = append(problems, Problem{
 					Key:     "size:" + path,
 					Message: fmt.Sprintf("note %s/%s is larger than %d bytes, skipped", dir.Label, name, MaxSize),
 				})
 				continue
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
+			case readFailed:
 				problems = append(problems, Problem{
 					Key:     "read:" + path,
 					Message: fmt.Sprintf("note %s/%s is unreadable: %v", dir.Label, name, err),
 				})
 				continue
 			}
-			items = append(items, newItem(dir, name, raw, info.ModTime()))
+			items = append(items, newItem(dir, name, raw, mtime))
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 	return items, problems
+}
+
+type readStatus int
+
+const (
+	readOK readStatus = iota
+	readSkip
+	readTooBig
+	readFailed
+)
+
+// readNote opens path once and checks and reads through that handle, so a
+// file that grows or is swapped after the directory listing cannot get past
+// the checks. O_NONBLOCK keeps the open of a FIFO from waiting for a writer.
+func readNote(path string) ([]byte, time.Time, readStatus, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, time.Time{}, readSkip, nil // removed since the listing
+		}
+		return nil, time.Time{}, readFailed, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, time.Time{}, readFailed, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, time.Time{}, readSkip, nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, MaxSize+1))
+	if err != nil {
+		return nil, time.Time{}, readFailed, err
+	}
+	if len(raw) > MaxSize {
+		return nil, time.Time{}, readTooBig, nil
+	}
+	return raw, info.ModTime(), readOK, nil
 }
 
 func newItem(dir Dir, name string, raw []byte, mtime time.Time) attention.Item {
