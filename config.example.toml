@@ -234,3 +234,28 @@ app_key_env = "DD_APP_KEY"
 # needs no keys:
 #   fixture = "testdata/datadog-findings.json"
 # fixture = ""
+
+[slack]
+# Slack messages waiting on you, each one an item: mentions of you, and DMs and
+# group DMs where someone else spoke last. attentiond only reads: it never
+# posts, reacts or marks anything read.
+# Off by default: it reaches the network and needs a user token (xoxp).
+enabled = false
+
+# The environment variable holding the user token. Never put the token in this
+# file. User scopes: search:read, im:read, im:history, mpim:read, mpim:history,
+# users:read. With the variable empty the source stays off and startup says so.
+token_env = "SLACK_USER_TOKEN"
+
+poll = "5m"
+
+# How far back a message still counts. Older ones are never items.
+lookback = "72h"
+
+# DMs and group DMs read per poll, most recently updated first.
+max_conversations = 30
+
+# Replay a recorded snapshot instead of calling the API. Read on every poll and
+# needs no token:
+#   fixture = "testdata/slack-snapshot.json"
+# fixture = ""

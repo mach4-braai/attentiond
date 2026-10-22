@@ -268,3 +268,30 @@ func TestDatadogDefaultsAndValidation(t *testing.T) {
 		t.Errorf("a fixture needs no site: %v", err)
 	}
 }
+
+func TestSlackDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Slack
+	if s.Enabled || s.TokenEnv != "SLACK_USER_TOKEN" || s.Poll.Std() != 5*time.Minute ||
+		s.Lookback.Std() != 72*time.Hour || s.MaxConversations != 30 || s.Fixture != "" {
+		t.Errorf("slack defaults = %+v", s)
+	}
+
+	for body, want := range map[string]string{
+		"[slack]\nenabled = true\npoll = \"0s\"\n":         "slack.poll",
+		"[slack]\nenabled = true\nlookback = \"0s\"\n":     "slack.lookback",
+		"[slack]\nenabled = true\nmax_conversations = 0\n": "slack.max_conversations",
+		"[slack]\nenabled = true\ntoken_env = \"\"\n":      "slack.token_env",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[slack]\nenabled = true\ntoken_env = \"\"\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no token variable: %v", err)
+	}
+}

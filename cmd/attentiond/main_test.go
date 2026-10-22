@@ -47,3 +47,37 @@ func TestDatadogSourceIsOffWithoutKeysAndWarnsByName(t *testing.T) {
 		t.Error("a disabled source built a poller")
 	}
 }
+
+func TestSlackSourceIsOffWithoutTokenAndWarnsByName(t *testing.T) {
+	t.Setenv("TEST_SLACK_TOKEN", "")
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store := attention.NewStore(log, attention.StoreConfig{})
+
+	cfg := config.Default().Slack
+	cfg.Enabled = true
+	cfg.TokenEnv = "TEST_SLACK_TOKEN"
+
+	poller, err := newSlackPoller(cfg, store, log)
+	if err != nil || poller != nil {
+		t.Fatalf("poller = %v, err = %v, want a disabled source and no error", poller, err)
+	}
+	if !strings.Contains(logs.String(), "TEST_SLACK_TOKEN") {
+		t.Errorf("warning does not name the missing variable: %s", logs.String())
+	}
+
+	t.Setenv("TEST_SLACK_TOKEN", "never-logged")
+	poller, err = newSlackPoller(cfg, store, log)
+	if err != nil || poller == nil {
+		t.Fatalf("poller = %v, err = %v, want a poller with a token", poller, err)
+	}
+	if strings.Contains(logs.String(), "never-logged") {
+		t.Errorf("the token reached the log: %s", logs.String())
+	}
+
+	cfg.Enabled = false
+	if poller, _ := newSlackPoller(cfg, store, log); poller != nil {
+		t.Error("a disabled source built a poller")
+	}
+}
