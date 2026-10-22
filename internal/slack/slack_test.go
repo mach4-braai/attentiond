@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -163,12 +164,18 @@ func TestMissingTokenIsReportedByVariableNameOnly(t *testing.T) {
 // relative to now so the lookback holds whenever the test runs.
 type fakeSlack struct {
 	*httptest.Server
-	token   string
-	mode    atomic.Value // "ok", "error" or "limited"
-	replied atomic.Bool
-	calls   atomic.Int64
-	badAuth atomic.Int64
-	now     time.Time
+	token     string
+	mode      atomic.Value // "ok", "error" or "limited"
+	replied   atomic.Bool
+	calls     atomic.Int64
+	badAuth   atomic.Int64
+	minePages atomic.Int64
+	now       time.Time
+	// filler is how many empty group DMs conversations.list returns before
+	// the real DMs.
+	filler int
+	// mine, when set, answers the from:<@you> search for a page.
+	mine func(page int) string
 }
 
 func ts(t time.Time) string { return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000) }
@@ -186,16 +193,27 @@ func newFakeSlack(t *testing.T, token string) *fakeSlack {
 		fmt.Fprint(w, `{"ok":true,"url":"https://example.slack.com/","user_id":"U0SELF"}`)
 	})
 	mux.HandleFunc("/search.messages", func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Query().Get("query") {
-		case "<@U0SELF>":
-			fmt.Fprintf(w, `{"ok":true,"messages":{"matches":[{"channel":{"id":"C0GENERAL","name":"general"},
+		query := r.URL.Query().Get("query")
+		if !strings.Contains(query, " after:") {
+			fmt.Fprint(w, `{"ok":false,"error":"search has no date bound"}`)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		switch {
+		case strings.HasPrefix(query, "<@U0SELF>"):
+			fmt.Fprintf(w, `{"ok":true,"messages":{"paging":{"pages":1},"matches":[{"channel":{"id":"C0GENERAL","name":"general"},
 			  "permalink":"https://example.slack.com/archives/C0GENERAL/p1","text":"<@U0SELF> status?","ts":%q,"user":"U0ALICE","username":"alice"}]}}`, mention)
-		case "from:<@U0SELF>":
-			if f.replied.Load() {
-				fmt.Fprintf(w, `{"ok":true,"messages":{"matches":[{"channel":{"id":"C0GENERAL","name":"general"},"text":"on it","ts":%q,"user":"U0SELF"}]}}`, reply)
+		case strings.HasPrefix(query, "from:<@U0SELF>"):
+			f.minePages.Add(1)
+			if f.mine != nil {
+				fmt.Fprint(w, f.mine(page))
 				return
 			}
-			fmt.Fprint(w, `{"ok":true,"messages":{"matches":[]}}`)
+			if f.replied.Load() {
+				fmt.Fprintf(w, `{"ok":true,"messages":{"paging":{"pages":1},"matches":[{"channel":{"id":"C0GENERAL","name":"general"},"text":"on it","ts":%q,"user":"U0SELF"}]}}`, reply)
+				return
+			}
+			fmt.Fprint(w, `{"ok":true,"messages":{"paging":{"pages":1},"matches":[]}}`)
 		default:
 			fmt.Fprint(w, `{"ok":false,"error":"unexpected query"}`)
 		}
@@ -205,7 +223,15 @@ func newFakeSlack(t *testing.T, token string) *fakeSlack {
 			fmt.Fprint(w, `{"ok":false,"error":"wrong types"}`)
 			return
 		}
-		fmt.Fprint(w, `{"ok":true,"channels":[{"id":"D0BOB","is_im":true,"updated":2},{"id":"D0ALICE","is_im":true,"updated":1}],"response_metadata":{"next_cursor":""}}`)
+		// Slack gives IMs no activity timestamp. Group DMs with nothing
+		// to say come first, so only reading them all finds bob.
+		var channels []string
+		for i := range f.filler {
+			channels = append(channels, fmt.Sprintf(`{"id":"G0FILL%d","is_mpim":true}`, i))
+		}
+		channels = append(channels, `{"id":"D0BOB","is_im":true}`, `{"id":"D0ALICE","is_im":true}`,
+			`{"id":"D0GONE","is_im":true,"is_user_deleted":true}`, `{"id":"D0SHUT","is_im":true,"is_open":false}`)
+		fmt.Fprintf(w, `{"ok":true,"channels":[%s],"response_metadata":{"next_cursor":""}}`, strings.Join(channels, ","))
 	})
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("oldest") == "" {
@@ -218,6 +244,8 @@ func newFakeSlack(t *testing.T, token string) *fakeSlack {
 		case "D0ALICE":
 			fmt.Fprintf(w, `{"ok":true,"messages":[{"user":"U0SELF","text":"yes","ts":%q},{"user":"U0ALICE","text":"around?","ts":%q}]}`,
 				ts(f.now.Add(-3*time.Hour)), ts(f.now.Add(-4*time.Hour)))
+		default:
+			fmt.Fprint(w, `{"ok":true,"messages":[]}`)
 		}
 	})
 	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
@@ -248,8 +276,10 @@ func newFakeSlack(t *testing.T, token string) *fakeSlack {
 func newLivePoller(t *testing.T, f *fakeSlack) (*Poller, *attention.Store) {
 	t.Helper()
 	store := attention.NewStore(discardLogger(), attention.StoreConfig{})
-	cfg := PollerConfig{Interval: 5 * time.Minute, Lookback: lookback, MaxConversations: 30}
-	return NewPoller(NewClient(f.URL, f.token, 5*time.Second), store, cfg, discardLogger()), store
+	cfg := PollerConfig{Interval: 5 * time.Minute, Lookback: lookback, MaxConversations: 100}
+	client := NewClient(f.URL, f.token, 5*time.Second)
+	client.pause = 0
+	return NewPoller(client, store, cfg, discardLogger()), store
 }
 
 func TestLivePollAnswersThroughTheAPIAndHonoursYourReply(t *testing.T) {
@@ -274,6 +304,104 @@ func TestLivePollAnswersThroughTheAPIAndHonoursYourReply(t *testing.T) {
 	items = store.Items()
 	if len(items) != 1 || items[0].Context["kind"] != "dm" {
 		t.Errorf("after replying in #general items = %+v, want only bob's DM", items)
+	}
+}
+
+func TestDMInTheThirtyFirstConversationStillAppears(t *testing.T) {
+	f := newFakeSlack(t, "test-token-value")
+	f.filler = 30
+	poller, store := newLivePoller(t, f)
+
+	poller.pollOnce(context.Background())
+
+	var sawBob bool
+	for _, item := range store.Items() {
+		sawBob = sawBob || item.Title == "bob (DM): got a minute?"
+	}
+	if !sawBob {
+		t.Errorf("bob's DM, 31st in the list, is missing: %+v", store.Items())
+	}
+	if status := poller.SourceStatus(); status.Warning != "" {
+		t.Errorf("warning = %q, want none under the cap", status.Warning)
+	}
+}
+
+func TestConversationCapIsHardAndWarns(t *testing.T) {
+	f := newFakeSlack(t, "test-token-value")
+	f.filler = 30
+	poller, store := newLivePoller(t, f)
+	poller.cfg.MaxConversations = 30
+
+	poller.pollOnce(context.Background())
+
+	for _, item := range store.Items() {
+		if item.Context["kind"] == "dm" {
+			t.Errorf("read past the cap: %s", item.Title)
+		}
+	}
+	if status := poller.SourceStatus(); !strings.Contains(status.Warning, "max_conversations") {
+		t.Errorf("warning = %q, want one naming max_conversations", status.Warning)
+	}
+}
+
+func ownPage(at time.Time, channel string, n, pages int) string {
+	var matches []string
+	for i := range n {
+		matches = append(matches, fmt.Sprintf(`{"channel":{"id":%q},"text":"x","ts":%q,"user":"U0SELF"}`,
+			channel, ts(at.Add(-time.Duration(i)*time.Second))))
+	}
+	return fmt.Sprintf(`{"ok":true,"messages":{"paging":{"pages":%d},"matches":[%s]}}`, pages, strings.Join(matches, ","))
+}
+
+func mentionShown(store *attention.Store) bool {
+	for _, item := range store.Items() {
+		if item.Context["kind"] == "mention" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestReplyOnTheSecondSearchPageClearsTheMention(t *testing.T) {
+	f := newFakeSlack(t, "test-token-value")
+	f.mine = func(page int) string {
+		if page == 1 {
+			// A hundred newer messages elsewhere push the reply to page 2.
+			return ownPage(f.now.Add(-10*time.Minute), "C0OTHER", 100, 2)
+		}
+		return fmt.Sprintf(`{"ok":true,"messages":{"paging":{"pages":2},"matches":[{"channel":{"id":"C0GENERAL"},"text":"on it","ts":%q,"user":"U0SELF"}]}}`,
+			ts(f.now.Add(-30*time.Minute)))
+	}
+	poller, store := newLivePoller(t, f)
+
+	poller.pollOnce(context.Background())
+
+	if mentionShown(store) {
+		t.Errorf("mention still shown although you replied on page 2: %+v", store.Items())
+	}
+	if status := poller.SourceStatus(); status.Warning != "" {
+		t.Errorf("warning = %q, want none", status.Warning)
+	}
+}
+
+func TestHittingTheSearchPageBoundWarns(t *testing.T) {
+	f := newFakeSlack(t, "test-token-value")
+	f.mine = func(page int) string {
+		// Endless recent messages: the oldest open mention is never reached.
+		return ownPage(f.now.Add(-10*time.Minute), "C0OTHER", 100, 100)
+	}
+	poller, store := newLivePoller(t, f)
+
+	poller.pollOnce(context.Background())
+
+	if got := f.minePages.Load(); got != searchMaxPages {
+		t.Errorf("read %d pages of your messages, want the bound %d", got, searchMaxPages)
+	}
+	if status := poller.SourceStatus(); !status.Healthy || !strings.Contains(status.Warning, "your own messages") {
+		t.Errorf("status = %+v, want healthy with a warning", status)
+	}
+	if !mentionShown(store) {
+		t.Errorf("the mention should stay on the board when the bound is hit")
 	}
 }
 

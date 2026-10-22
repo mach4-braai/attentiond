@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,7 +87,7 @@ func (p *Poller) pollOnce(ctx context.Context) time.Duration {
 	}
 	items := Normalize(snap, now, p.cfg.Lookback)
 	p.store.ReplaceSource(SourceName, items)
-	p.recordSuccess(len(items), snap.DMMethod)
+	p.recordSuccess(len(items), snap.DMMethod, strings.Join(snap.Warnings, "; "))
 	return p.cfg.Interval
 }
 
@@ -97,15 +98,17 @@ func (p *Poller) SourceStatus() attention.SourceStatus {
 	return p.status
 }
 
-func (p *Poller) recordSuccess(items int, dmMethod string) {
+func (p *Poller) recordSuccess(items int, dmMethod, warning string) {
 	p.mu.Lock()
 	recovered := !p.status.Healthy && p.status.LastError != ""
 	first := p.status.LastSuccess == nil
+	newWarning := warning != "" && p.status.Warning != warning
 	now := time.Now()
 	p.status.Healthy = true
 	p.status.Items = items
 	p.status.LastSuccess = &now
 	p.status.LastError = ""
+	p.status.Warning = warning
 	mode := p.status.Mode
 	p.mu.Unlock()
 
@@ -114,6 +117,9 @@ func (p *Poller) recordSuccess(items int, dmMethod string) {
 		p.log.Info("slack adapter ready", "items", items, "mode", mode, "dm_method", dmMethod)
 	case recovered:
 		p.log.Info("slack adapter recovered", "items", items)
+	}
+	if newWarning {
+		p.log.Warn("slack result is incomplete", "warning", warning)
 	}
 }
 
