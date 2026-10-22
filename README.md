@@ -502,6 +502,83 @@ To work without keys, point `fixture` at a recorded response.
 `testdata/datadog-findings.json` is one: four findings across two images. The
 file is read on every poll.
 
+## Slack
+
+`[slack]` puts the Slack messages waiting on you on the board. It reads with
+your own user token and never writes: no posting, no reactions, nothing marked
+read.
+
+It is off by default. Create a Slack app, add these **user token** scopes
+under OAuth & Permissions, install it to your workspace and copy the
+`xoxp-` User OAuth Token:
+
+| Scope | Used for |
+| --- | --- |
+| `search:read` | `search.messages`, for mentions and your own replies |
+| `im:read`, `im:history` | `conversations.list` and `conversations.history` on DMs |
+| `mpim:read`, `mpim:history` | the same for group DMs |
+| `users:read` | `users.info`, to show a name instead of a user ID |
+
+Export the token in the environment of the daemon, in the variable
+`token_env` names (`SLACK_USER_TOKEN`), then enable the source:
+
+```toml
+[slack]
+enabled = true
+token_env = "SLACK_USER_TOKEN"
+poll = "5m"
+lookback = "72h"
+max_conversations = 30
+```
+
+With the variable empty the source stays off and startup names the variable.
+The token is never logged and is scrubbed from every error. Without
+`users:read` the sender falls back to the search result's handle, or the user
+ID for a DM.
+
+Each poll calls `auth.test` once to learn your user ID and workspace URL (kept
+after the first success), then reads:
+
+- **Mentions.** `search.messages` with `query=<@you>`, `sort=timestamp`, 100
+  results. A second search, `from:<@you>`, lists your own recent messages. A
+  mention disappears once you posted anything later in the same channel, which
+  covers a reply in its thread.
+- **Direct messages.** Slack documents no search modifier for "sent to me in a
+  DM" (only `in:` and `from:`), so attentiond lists `conversations.list`
+  `types=im,mpim`, keeps the `max_conversations` most recently updated, and
+  reads each one's `conversations.history` with `oldest` set to the lookback.
+  A message from someone else counts when you have posted nothing later in that
+  conversation. A conversation beyond the cap is not read, so raise
+  `max_conversations` if you talk to more people than that.
+
+A message older than `lookback` is never an item. Your own messages never are.
+Thread replies inside a DM are not read, because `conversations.history`
+returns only top-level messages.
+
+Every message is one item: `source` is `slack`, the id is
+`slack:<channel id>:<ts>`, `state` is `needs_attention`, `severity` is `info`
+and priority is the default for the state. `label` is `mentioned you` or
+`messaged you`. `title` is `<sender> in #<channel>: <text>` for a mention and
+`<sender> (DM): <text>` for a DM, with the text cut to its first 100
+characters on one line. A mention found inside a DM is reported as a DM.
+`updated_at` is the message time.
+
+| `context` key | Value |
+| --- | --- |
+| `channel` | channel ID |
+| `ts` | message timestamp |
+| `permalink` | Slack's permalink for a mention; built from the workspace URL for a DM |
+| `sender` | display name |
+| `kind` | `mention` or `dm` |
+
+Like Datadog, a failed poll keeps the last good result and sets the error in
+`/health`. On HTTP 429 the next poll waits for the longer of `poll` and the
+`Retry-After` header.
+
+To work without a token, point `fixture` at a recorded snapshot.
+`testdata/slack-snapshot.json` is one: workspace `example`, users `alice` and
+`bob`, and an `as_of` time so its timestamps stay inside the lookback.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and

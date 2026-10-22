@@ -26,6 +26,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
 	"github.com/devanmcgeer/attentiond/internal/notify"
+	"github.com/devanmcgeer/attentiond/internal/slack"
 	"github.com/devanmcgeer/attentiond/internal/spend"
 )
 
@@ -155,6 +156,14 @@ func run() error {
 		sources[datadog.SourceName] = datadogPoller.SourceStatus
 	}
 
+	slackPoller, err := newSlackPoller(cfg.Slack, store, logger)
+	if err != nil {
+		return err
+	}
+	if slackPoller != nil {
+		sources[slack.SourceName] = slackPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:     store,
 		Sources:   sources,
@@ -180,6 +189,9 @@ func run() error {
 	}
 	if datadogPoller != nil {
 		go datadogPoller.Run(ctx)
+	}
+	if slackPoller != nil {
+		go slackPoller.Run(ctx)
 	}
 	if notifier != nil {
 		go notifier.Run(ctx)
@@ -347,6 +359,37 @@ func newDatadogPoller(cfg config.Datadog, store *attention.Store, log *slog.Logg
 
 	return datadog.NewPoller(
 		datadog.NewClient(datadog.BaseURL(cfg.Site), apiKey, appKey, 30*time.Second),
+		store, pollerCfg, log), nil
+}
+
+// newSlackPoller returns nil when the Slack source is off or its token is
+// missing, like Datadog. A fixture needs no token, so it is never looked for.
+func newSlackPoller(cfg config.Slack, store *attention.Store, log *slog.Logger) (*slack.Poller, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+
+	pollerCfg := slack.PollerConfig{
+		Interval:         cfg.Poll.Std(),
+		Lookback:         cfg.Lookback.Std(),
+		MaxConversations: cfg.MaxConversations,
+		Fixture:          cfg.Fixture,
+	}
+	if cfg.Fixture != "" {
+		log.Info("slack adapter enabled", "fixture", cfg.Fixture, "poll", cfg.Poll.String())
+		return slack.NewPoller(nil, store, pollerCfg, log), nil
+	}
+
+	token, err := slack.ResolveToken(cfg.TokenEnv)
+	if err != nil {
+		log.Warn("slack adapter disabled, no credential", "error", err)
+		return nil, nil
+	}
+	log.Info("slack adapter enabled",
+		"credential", cfg.TokenEnv, "poll", cfg.Poll.String(), "lookback", cfg.Lookback.String())
+
+	return slack.NewPoller(
+		slack.NewClient(slack.DefaultBaseURL, token, 30*time.Second),
 		store, pollerCfg, log), nil
 }
 
