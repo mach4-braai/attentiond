@@ -47,6 +47,7 @@ type Config struct {
 	Spend     Spend     `toml:"spend"`
 	Log       Log       `toml:"log"`
 	Datadog   Datadog   `toml:"datadog"`
+	Slack     Slack     `toml:"slack"`
 }
 
 // Log is the signal log: one JSON line for every item that appears, changes
@@ -161,6 +162,21 @@ type Datadog struct {
 	AppKeyEnv string `toml:"app_key_env"`
 	// Fixture replays a recorded response instead of calling the API, and
 	// needs no keys.
+	Fixture string `toml:"fixture"`
+}
+
+// Slack is the source for messages waiting on you. It reads with a user
+// token (xoxp), named by an environment variable so it never lands in a file.
+type Slack struct {
+	Enabled  bool     `toml:"enabled"`
+	TokenEnv string   `toml:"token_env"`
+	Poll     Duration `toml:"poll"`
+	// Lookback is how far back a message still counts.
+	Lookback Duration `toml:"lookback"`
+	// MaxConversations caps how many DMs and group DMs are read per poll.
+	MaxConversations int `toml:"max_conversations"`
+	// Fixture replays a recorded snapshot instead of calling the API, and
+	// needs no token.
 	Fixture string `toml:"fixture"`
 }
 
@@ -290,6 +306,14 @@ func Default() Config {
 			APIKeyEnv: "DD_API_KEY",
 			AppKeyEnv: "DD_APP_KEY",
 		},
+		Slack: Slack{
+			// Off: it reaches the network and needs a user token.
+			Enabled:          false,
+			TokenEnv:         "SLACK_USER_TOKEN",
+			Poll:             Duration(5 * time.Minute),
+			Lookback:         Duration(72 * time.Hour),
+			MaxConversations: 30,
+		},
 	}
 }
 
@@ -387,6 +411,21 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		}
 		if strings.TrimSpace(cfg.Datadog.Site) == "" && cfg.Datadog.Fixture == "" {
 			return Default(), false, fmt.Errorf("%s: datadog.site: want a site such as datadoghq.eu", path)
+		}
+	}
+	if cfg.Slack.Enabled {
+		if cfg.Slack.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: slack.poll %s: want a period", path, cfg.Slack.Poll)
+		}
+		if cfg.Slack.Lookback <= 0 {
+			return Default(), false, fmt.Errorf("%s: slack.lookback %s: want a period", path, cfg.Slack.Lookback)
+		}
+		if cfg.Slack.MaxConversations < 1 {
+			return Default(), false, fmt.Errorf("%s: slack.max_conversations %d: want 1 or more",
+				path, cfg.Slack.MaxConversations)
+		}
+		if strings.TrimSpace(cfg.Slack.TokenEnv) == "" && cfg.Slack.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: slack.token_env: want an environment variable name", path)
 		}
 	}
 
