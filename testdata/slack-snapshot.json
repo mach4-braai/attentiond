@@ -1,0 +1,59 @@
+{
+  "as_of": 1760000000,
+  "dm_method": "conversations.list+conversations.history",
+  "self": {"id": "U0SELF", "url": "https://example.slack.com/"},
+  "users": {"U0ALICE": "alice", "U0BOB": "bob", "U0SELF": "me"},
+  "mentions": [
+    {
+      "channel": {"id": "C0GENERAL", "name": "general", "is_im": false, "is_mpim": false},
+      "permalink": "https://example.slack.com/archives/C0GENERAL/p1759990000000100",
+      "text": "<@U0SELF> can you review the rollout plan?",
+      "ts": "1759990000.000100",
+      "user": "U0ALICE",
+      "username": "alice"
+    },
+    {
+      "channel": {"id": "C0RANDOM", "name": "random", "is_im": false, "is_mpim": false},
+      "permalink": "https://example.slack.com/archives/C0RANDOM/p1759980000000200",
+      "text": "<@U0SELF> lunch on thursday?",
+      "ts": "1759980000.000200",
+      "user": "U0ALICE",
+      "username": "alice"
+    },
+    {
+      "channel": {"id": "C0GENERAL", "name": "general", "is_im": false, "is_mpim": false},
+      "permalink": "https://example.slack.com/archives/C0GENERAL/p1759000000000100",
+      "text": "<@U0SELF> an old question nobody needs answered now",
+      "ts": "1759000000.000100",
+      "user": "U0ALICE",
+      "username": "alice"
+    }
+  ],
+  "mine": [
+    {
+      "channel": {"id": "C0RANDOM", "name": "random", "is_im": false, "is_mpim": false},
+      "permalink": "https://example.slack.com/archives/C0RANDOM/p1759985000000300",
+      "text": "thursday works",
+      "ts": "1759985000.000300",
+      "user": "U0SELF",
+      "username": "me"
+    }
+  ],
+  "conversations": [
+    {
+      "id": "D0BOB",
+      "is_mpim": false,
+      "messages": [
+        {"user": "U0BOB", "text": "ping, got a minute?", "ts": "1759995000.000100"}
+      ]
+    },
+    {
+      "id": "D0ALICE",
+      "is_mpim": false,
+      "messages": [
+        {"user": "U0SELF", "text": "yes, on my way", "ts": "1759975000.000200"},
+        {"user": "U0ALICE", "text": "are you around?", "ts": "1759970000.000100"}
+      ]
+    }
+  ]
+}
