@@ -47,6 +47,7 @@ type Config struct {
 	Spend     Spend     `toml:"spend"`
 	Log       Log       `toml:"log"`
 	Datadog   Datadog   `toml:"datadog"`
+	Outline   Outline   `toml:"outline"`
 }
 
 // Log is the signal log: one JSON line for every item that appears, changes
@@ -161,6 +162,23 @@ type Datadog struct {
 	AppKeyEnv string `toml:"app_key_env"`
 	// Fixture replays a recorded response instead of calling the API, and
 	// needs no keys.
+	Fixture string `toml:"fixture"`
+}
+
+// Outline is the mentions source. It lists the notifications of the API
+// key's owner and keeps the unread mentions. The key comes from the
+// environment variable TokenEnv names.
+type Outline struct {
+	Enabled bool `toml:"enabled"`
+	// BaseURL is the origin of the Outline instance, such as
+	// https://app.getoutline.com. It is required unless a fixture is set.
+	BaseURL  string   `toml:"base_url"`
+	TokenEnv string   `toml:"token_env"`
+	Poll     Duration `toml:"poll"`
+	// MaxItems caps how many mentions one poll keeps.
+	MaxItems int `toml:"max_items"`
+	// Fixture replays a recorded response instead of calling the API, and
+	// needs no key.
 	Fixture string `toml:"fixture"`
 }
 
@@ -290,6 +308,13 @@ func Default() Config {
 			APIKeyEnv: "DD_API_KEY",
 			AppKeyEnv: "DD_APP_KEY",
 		},
+		Outline: Outline{
+			// Off: it reaches the network and needs a key.
+			Enabled:  false,
+			TokenEnv: "OUTLINE_API_KEY",
+			Poll:     Duration(5 * time.Minute),
+			MaxItems: 100,
+		},
 	}
 }
 
@@ -387,6 +412,18 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 		}
 		if strings.TrimSpace(cfg.Datadog.Site) == "" && cfg.Datadog.Fixture == "" {
 			return Default(), false, fmt.Errorf("%s: datadog.site: want a site such as datadoghq.eu", path)
+		}
+	}
+	if cfg.Outline.Enabled {
+		if cfg.Outline.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: outline.poll %s: want a period", path, cfg.Outline.Poll)
+		}
+		if cfg.Outline.MaxItems < 1 {
+			return Default(), false, fmt.Errorf("%s: outline.max_items %d: want at least 1",
+				path, cfg.Outline.MaxItems)
+		}
+		if strings.TrimSpace(cfg.Outline.BaseURL) == "" && cfg.Outline.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: outline.base_url: want an origin such as https://app.getoutline.com", path)
 		}
 	}
 
