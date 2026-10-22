@@ -25,6 +25,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/github"
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
+	"github.com/devanmcgeer/attentiond/internal/notes"
 	"github.com/devanmcgeer/attentiond/internal/notify"
 	"github.com/devanmcgeer/attentiond/internal/outline"
 	"github.com/devanmcgeer/attentiond/internal/slack"
@@ -173,6 +174,11 @@ func run() error {
 		sources[outline.SourceName] = outlinePoller.SourceStatus
 	}
 
+	notesPoller := newNotesPoller(cfg.Notes, store, logger)
+	if notesPoller != nil {
+		sources[notes.SourceName] = notesPoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:     store,
 		Sources:   sources,
@@ -204,6 +210,9 @@ func run() error {
 	}
 	if outlinePoller != nil {
 		go outlinePoller.Run(ctx)
+	}
+	if notesPoller != nil {
+		go notesPoller.Run(ctx)
 	}
 	if notifier != nil {
 		go notifier.Run(ctx)
@@ -434,6 +443,21 @@ func newOutlinePoller(cfg config.Outline, store *attention.Store, log *slog.Logg
 	return outline.NewPoller(
 		outline.NewClient(cfg.BaseURL, token, 30*time.Second),
 		store, pollerCfg, log), nil
+}
+
+// newNotesPoller returns nil when the notes source is off. A directory that
+// is missing now is not an error: it may be created later, and the poller
+// reports it in /health.
+func newNotesPoller(cfg config.Notes, store *attention.Store, log *slog.Logger) *notes.Poller {
+	if !cfg.Enabled {
+		return nil
+	}
+	dirs := make([]notes.Dir, 0, len(cfg.Dirs))
+	for _, d := range cfg.Dirs {
+		dirs = append(dirs, notes.Dir{Path: d.Path, Label: d.Label})
+	}
+	log.Info("notes adapter enabled", "dirs", len(dirs), "poll", cfg.Poll.String())
+	return notes.NewPoller(store, notes.PollerConfig{Interval: cfg.Poll.Std(), Dirs: dirs}, log)
 }
 
 // newCalendarPoller returns nil when the calendar source is off or has no

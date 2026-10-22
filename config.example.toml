@@ -286,3 +286,21 @@ token_env = "OUTLINE_API_KEY"
 # Read on every poll and needs no key:
 #   fixture = "testdata/outline-notifications.json"
 # fixture = ""
+
+[notes]
+# Markdown notes, such as voice-note captures of ideas, each one an item
+# labelled "idea". attentiond only reads: it never edits, moves or deletes a
+# note. Off by default: it reads directories you have to name.
+enabled = false
+
+# How often the directories are listed.
+poll = "1m"
+
+# One table per watched directory. Only its top level is read: *.md files, no
+# subdirectories, no dotfiles, nothing over 1 MiB. A leading ~ is expanded and
+# the path must otherwise be absolute. Labels must be unique, because the item
+# id is notes:<label>/<file name>. A directory that does not exist is a
+# warning in /health, not an error.
+# [[notes.dirs]]
+# path = "~/notes/ideas"
+# label = "ideas"

@@ -49,6 +49,7 @@ type Config struct {
 	Datadog   Datadog   `toml:"datadog"`
 	Slack     Slack     `toml:"slack"`
 	Outline   Outline   `toml:"outline"`
+	Notes     Notes     `toml:"notes"`
 }
 
 // Log is the signal log: one JSON line for every item that appears, changes
@@ -198,6 +199,22 @@ type Outline struct {
 	Fixture string `toml:"fixture"`
 }
 
+// Notes is the markdown notes source. It watches the top level of each
+// [[notes.dirs]] directory and makes one item per *.md file.
+type Notes struct {
+	Enabled bool       `toml:"enabled"`
+	Poll    Duration   `toml:"poll"`
+	Dirs    []NotesDir `toml:"dirs"`
+}
+
+// NotesDir is one watched directory. Label prefixes the id of every note in
+// it, so two directories can hold files with the same name.
+type NotesDir struct {
+	// Path is absolute once loaded: a leading ~ is expanded.
+	Path  string `toml:"path"`
+	Label string `toml:"label"`
+}
+
 // Calendar is the meetings source. It reads iCalendar feeds, one per
 // [[calendar.feeds]] entry, so several calendars can be watched at once.
 type Calendar struct {
@@ -339,6 +356,11 @@ func Default() Config {
 			Poll:     Duration(5 * time.Minute),
 			MaxItems: 100,
 		},
+		Notes: Notes{
+			// Off: it reads directories the user has to name.
+			Enabled: false,
+			Poll:    Duration(time.Minute),
+		},
 	}
 }
 
@@ -465,6 +487,9 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 			return Default(), false, fmt.Errorf("%s: outline.base_url: want an origin such as https://app.getoutline.com", path)
 		}
 	}
+	if err := validateNotes(&cfg.Notes); err != nil {
+		return Default(), false, fmt.Errorf("%s: %w", path, err)
+	}
 
 	return cfg, true, nil
 }
@@ -474,4 +499,43 @@ func plural(word string, n int) string {
 		return word
 	}
 	return word + "s"
+}
+
+// validateNotes expands ~ in every directory and checks the table. A relative
+// path would depend on where the daemon was started, so it is refused.
+func validateNotes(n *Notes) error {
+	for i := range n.Dirs {
+		p := strings.TrimSpace(n.Dirs[i].Path)
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("notes.dirs[%d].path %q: cannot expand ~: %w", i, p, err)
+			}
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+		n.Dirs[i].Path = p
+	}
+	if !n.Enabled {
+		return nil
+	}
+	if n.Poll <= 0 {
+		return fmt.Errorf("notes.poll %s: want a period", n.Poll)
+	}
+	if len(n.Dirs) == 0 {
+		return errors.New("notes.dirs: want at least one [[notes.dirs]] entry when notes is enabled")
+	}
+	labels := make(map[string]bool, len(n.Dirs))
+	for i, d := range n.Dirs {
+		if !filepath.IsAbs(d.Path) {
+			return fmt.Errorf("notes.dirs[%d].path %q: want an absolute path or one starting with ~", i, d.Path)
+		}
+		if strings.TrimSpace(d.Label) == "" {
+			return fmt.Errorf("notes.dirs[%d].label: want a label", i)
+		}
+		if labels[d.Label] {
+			return fmt.Errorf("notes.dirs[%d].label %q: already used by another directory", i, d.Label)
+		}
+		labels[d.Label] = true
+	}
+	return nil
 }

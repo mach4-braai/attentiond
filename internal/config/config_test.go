@@ -321,3 +321,41 @@ func TestOutlineDefaultsAndValidation(t *testing.T) {
 		t.Errorf("a fixture needs no base_url: %v", err)
 	}
 }
+
+func TestNotesIsOffAndExpandsTilde(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notes.Enabled || cfg.Notes.Poll.Std() != time.Minute || len(cfg.Notes.Dirs) != 0 {
+		t.Errorf("notes defaults = %+v", cfg.Notes)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, _, err = Load(write(t, "[notes]\nenabled = true\n[[notes.dirs]]\npath = \"~/notes/ideas\"\nlabel = \"ideas\"\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Notes.Dirs[0].Path, filepath.Join(home, "notes", "ideas"); got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+}
+
+func TestNotesValidation(t *testing.T) {
+	for body, want := range map[string]string{
+		"[notes]\nenabled = true\n": "notes.dirs",
+		"[notes]\nenabled = true\n[[notes.dirs]]\npath = \"relative/dir\"\nlabel = \"a\"\n":                                             "absolute",
+		"[notes]\nenabled = true\n[[notes.dirs]]\npath = \"/tmp/a\"\nlabel = \"x\"\n[[notes.dirs]]\npath = \"/tmp/b\"\nlabel = \"x\"\n": "label",
+		"[notes]\nenabled = true\npoll = \"0s\"\n[[notes.dirs]]\npath = \"/tmp/a\"\nlabel = \"x\"\n":                                    "notes.poll",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	// Disabled notes need no directories.
+	if _, _, err := Load(write(t, "[notes]\nenabled = false\n"), true); err != nil {
+		t.Errorf("disabled notes rejected: %v", err)
+	}
+}
