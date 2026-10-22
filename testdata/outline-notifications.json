@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "status": 200,
+  "pagination": {"limit": 25, "offset": 0},
+  "data": [
+    {
+      "id": "6f1c0a52-0000-4000-8000-000000000001",
+      "event": "documents.mentioned",
+      "actor": {"id": "a1", "name": "alice"},
+      "documentId": "d1",
+      "document": {"id": "d1", "title": "Acme handbook", "url": "/doc/acme-handbook-AbC123"},
+      "viewedAt": null,
+      "archivedAt": null,
+      "createdAt": "2026-10-20T09:15:00.000Z"
+    },
+    {
+      "id": "6f1c0a52-0000-4000-8000-000000000002",
+      "event": "comments.mentioned",
+      "actor": {"id": "a2", "name": "bob"},
+      "documentId": "d2",
+      "commentId": "c9",
+      "document": {"id": "d2", "title": "Acme onboarding", "url": "/doc/acme-onboarding-XyZ789"},
+      "viewedAt": null,
+      "archivedAt": null,
+      "createdAt": "2026-10-21T14:02:00.000Z"
+    },
+    {
+      "id": "6f1c0a52-0000-4000-8000-000000000003",
+      "event": "documents.mentioned",
+      "actor": {"id": "a1", "name": "alice"},
+      "documentId": "d3",
+      "document": {"id": "d3", "title": "Acme roadmap", "url": "/doc/acme-roadmap-Q1w2e3"},
+      "viewedAt": "2026-10-20T10:00:00.000Z",
+      "archivedAt": null,
+      "createdAt": "2026-10-19T08:00:00.000Z"
+    },
+    {
+      "id": "6f1c0a52-0000-4000-8000-000000000004",
+      "event": "comments.create",
+      "actor": {"id": "a2", "name": "bob"},
+      "documentId": "d1",
+      "commentId": "c10",
+      "document": {"id": "d1", "title": "Acme handbook", "url": "/doc/acme-handbook-AbC123"},
+      "viewedAt": null,
+      "archivedAt": null,
+      "createdAt": "2026-10-21T15:00:00.000Z"
+    }
+  ]
+}
