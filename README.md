@@ -579,6 +579,74 @@ To work without a token, point `fixture` at a recorded snapshot.
 `testdata/slack-snapshot.json` is one: workspace `example`, users `alice` and
 `bob`, and an `as_of` time so its timestamps stay inside the lookback.
 
+## Outline
+
+`[outline]` shows the documents and comments that mention you. Every five
+minutes it calls `POST <base_url>/api/notifications.list` as the owner of the
+API key, newest first, `limit` 100 at a time with a growing `offset`, and
+keeps the notifications that are all of these:
+
+- `event` is `documents.mentioned` or `comments.mentioned`. Group mentions
+  (`*.group_mentioned`) and every other event are skipped.
+- `viewedAt` is null, so you have not read it.
+- `archivedAt` is null.
+
+Paging stops at `max_items` kept mentions (default 100), at a short page, or
+after 20 pages. The published notification schema carries only `documentId`,
+so each distinct document is looked up once per poll with
+`POST /api/documents.info` for its title and path. A document the key can no
+longer open (403 or 404) still yields the item, titled "mentioned you in a
+document" and without a `url`. It only reads. Nothing is written to Outline,
+and a notification stays unread until you open it in Outline.
+
+It is off by default. To set it up:
+
+1. In Outline open **Settings, API & Apps** and create an API key. The key acts
+   as you, and the notifications it lists are yours. A scoped key needs the
+   endpoint scopes `notifications.list` and `documents.info`, or the broader
+   `notifications.*` and `documents:read`; a key with the global `read` scope
+   also works.
+2. Export it where attentiond runs, in the variable `token_env` names
+   (default `OUTLINE_API_KEY`). The key never goes in the TOML file. With the
+   variable empty the source stays off and startup warns, naming the variable
+   and never the value.
+3. Enable the table:
+
+```toml
+[outline]
+enabled = true
+base_url = "https://app.getoutline.com"   # or your self-hosted origin
+# token_env = "OUTLINE_API_KEY"
+# poll = "5m"
+# max_items = 100
+```
+
+Every mention is one item: `source` is `outline`, the id is
+`outline:<notification id>`, `title` is `<actor> mentioned you in <document
+title>`, `label` is `mentioned you` and `state` is `needs_attention` with
+severity `info`. `updated_at` is the notification's `createdAt`. The item
+disappears on the poll after you read or archive the notification in Outline.
+
+| `context` key | Value |
+| --- | --- |
+| `url` | `base_url` plus the document's `url` path. A comment mention adds `?commentId=<comment id>`, which Outline uses to scroll to the comment. |
+| `actor` | the mentioning user's name |
+| `document` | the document's title |
+| `event` | `documents.mentioned` or `comments.mentioned` |
+
+`url` and `document` are left out when the document could not be read.
+
+Like Datadog, a failed poll keeps the last good result and sets the error in
+`/health`. A server that answers 404 to `notifications.list` predates the
+notifications API. attentiond logs one warning saying so and `/health` shows
+the error; Outline's API reference does not state the first version with the
+endpoint, so upgrade to a current release.
+
+To work without a key, point `fixture` at a recorded `notifications.list`
+response, with each notification's `document` embedded.
+`testdata/outline-notifications.json` is one: two unread mentions, one read
+mention and one reply that is not a mention. The file is read on every poll.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and

@@ -26,6 +26,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/herdr"
 	"github.com/devanmcgeer/attentiond/internal/httpapi"
 	"github.com/devanmcgeer/attentiond/internal/notify"
+	"github.com/devanmcgeer/attentiond/internal/outline"
 	"github.com/devanmcgeer/attentiond/internal/slack"
 	"github.com/devanmcgeer/attentiond/internal/spend"
 )
@@ -164,6 +165,14 @@ func run() error {
 		sources[slack.SourceName] = slackPoller.SourceStatus
 	}
 
+	outlinePoller, err := newOutlinePoller(cfg.Outline, store, logger)
+	if err != nil {
+		return err
+	}
+	if outlinePoller != nil {
+		sources[outline.SourceName] = outlinePoller.SourceStatus
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Store:     store,
 		Sources:   sources,
@@ -192,6 +201,9 @@ func run() error {
 	}
 	if slackPoller != nil {
 		go slackPoller.Run(ctx)
+	}
+	if outlinePoller != nil {
+		go outlinePoller.Run(ctx)
 	}
 	if notifier != nil {
 		go notifier.Run(ctx)
@@ -390,6 +402,37 @@ func newSlackPoller(cfg config.Slack, store *attention.Store, log *slog.Logger) 
 
 	return slack.NewPoller(
 		slack.NewClient(slack.DefaultBaseURL, token, 30*time.Second),
+		store, pollerCfg, log), nil
+}
+
+// newOutlinePoller returns nil when the Outline source is off or its API key
+// is missing. A fixture needs no key, so it is never looked for.
+func newOutlinePoller(cfg config.Outline, store *attention.Store, log *slog.Logger) (*outline.Poller, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+
+	pollerCfg := outline.PollerConfig{
+		Interval: cfg.Poll.Std(),
+		BaseURL:  cfg.BaseURL,
+		MaxItems: cfg.MaxItems,
+		Fixture:  cfg.Fixture,
+	}
+	if cfg.Fixture != "" {
+		log.Info("outline adapter enabled", "fixture", cfg.Fixture, "poll", cfg.Poll.String())
+		return outline.NewPoller(nil, store, pollerCfg, log), nil
+	}
+
+	token, err := outline.ResolveKey(cfg.TokenEnv)
+	if err != nil {
+		log.Warn("outline adapter disabled, no credential", "error", err)
+		return nil, nil
+	}
+	log.Info("outline adapter enabled",
+		"base_url", cfg.BaseURL, "credential", cfg.TokenEnv, "poll", cfg.Poll.String())
+
+	return outline.NewPoller(
+		outline.NewClient(cfg.BaseURL, token, 30*time.Second),
 		store, pollerCfg, log), nil
 }
 

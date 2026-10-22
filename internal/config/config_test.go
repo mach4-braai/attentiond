@@ -295,3 +295,29 @@ func TestSlackDefaultsAndValidation(t *testing.T) {
 		t.Errorf("a fixture needs no token variable: %v", err)
 	}
 }
+
+func TestOutlineDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := cfg.Outline
+	if o.Enabled || o.BaseURL != "" || o.TokenEnv != "OUTLINE_API_KEY" ||
+		o.Poll.Std() != 5*time.Minute || o.MaxItems != 100 || o.Fixture != "" {
+		t.Errorf("outline defaults = %+v", o)
+	}
+
+	for body, want := range map[string]string{
+		"[outline]\nenabled = true\n":                                          "outline.base_url",
+		"[outline]\nenabled = true\nbase_url = \"https://x\"\npoll = \"0s\"\n": "outline.poll",
+		"[outline]\nenabled = true\nbase_url = \"https://x\"\nmax_items = 0\n": "outline.max_items",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[outline]\nenabled = true\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no base_url: %v", err)
+	}
+}
