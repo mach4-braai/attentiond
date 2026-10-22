@@ -539,21 +539,27 @@ ID for a DM.
 Each poll calls `auth.test` once to learn your user ID and workspace URL (kept
 after the first success), then reads:
 
-- **Mentions.** `search.messages` with `query=<@you>`, `sort=timestamp`, 100
-  results. A second search, `from:<@you>`, lists your own recent messages. A
-  mention disappears once you posted anything later in the same channel, which
-  covers a reply in its thread.
+- **Mentions.** `search.messages` with `query=<@you> after:<date>`,
+  `sort=timestamp`, 100 results a page, newest first, up to 5 pages. A second
+  search, `from:<@you> after:<date>`, lists your own messages, paged the same
+  way and read only back to the oldest open mention. A mention disappears once
+  you posted anything later in the same channel, which covers a reply in its
+  thread.
 - **Direct messages.** Slack documents no search modifier for "sent to me in a
   DM" (only `in:` and `from:`), so attentiond lists `conversations.list`
-  `types=im,mpim`, keeps the `max_conversations` most recently updated, and
-  reads each one's `conversations.history` with `oldest` set to the lookback.
-  A message from someone else counts when you have posted nothing later in that
-  conversation. A conversation beyond the cap is not read, so raise
-  `max_conversations` if you talk to more people than that.
+  `types=im,mpim` and reads each conversation's `conversations.history` with
+  `oldest` set to the lookback and a limit of 50. Slack gives IMs no activity
+  time, so nothing can rank them: every conversation is read, skipping ones
+  Slack marks `is_user_deleted` or `is_open: false`. Calls are spaced 1.2
+  seconds apart for the Tier 3 rate limit, so 30 conversations take about 40
+  seconds. `max_conversations` is a hard cap, and `/health` warns when it cuts
+  conversations off. A message from someone else counts when you have posted
+  nothing later in that conversation.
 
 A message older than `lookback` is never an item. Your own messages never are.
 Thread replies inside a DM are not read, because `conversations.history`
-returns only top-level messages.
+returns only top-level messages. That means a mention of you inside a DM
+thread is not seen either.
 
 Every message is one item: `source` is `slack`, the id is
 `slack:<channel id>:<ts>`, `state` is `needs_attention`, `severity` is `info`
@@ -574,6 +580,10 @@ characters on one line. A mention found inside a DM is reported as a DM.
 Like Datadog, a failed poll keeps the last good result and sets the error in
 `/health`. On HTTP 429 the next poll waits for the longer of `poll` and the
 `Retry-After` header.
+
+When a bound cuts a poll short, the poll still succeeds and `/health` carries
+a warning: the mention search or the search of your own messages hit its
+5-page bound, or there are more DMs than `max_conversations`.
 
 To work without a token, point `fixture` at a recorded snapshot.
 `testdata/slack-snapshot.json` is one: workspace `example`, users `alice` and
