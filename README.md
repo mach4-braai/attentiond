@@ -502,6 +502,48 @@ To work without keys, point `fixture` at a recorded response.
 `testdata/datadog-findings.json` is one: four findings across two images. The
 file is read on every poll.
 
+## Notes
+
+`[notes]` turns markdown files into items. It lists the top level of each
+`[[notes.dirs]]` directory every minute (`poll`) and makes one item per `*.md`
+file. It only reads: it never edits or moves a note, and it does not recurse.
+Dotfiles and files over 1 MiB are skipped, and the oversized ones are logged
+once.
+
+```toml
+[notes]
+enabled = true
+
+[[notes.dirs]]
+path = "~/notes/ideas"
+label = "ideas"
+```
+
+It is off by default. With it on there must be at least one directory, every
+path must be absolute once `~` is expanded, and labels must be unique.
+
+Every note is one item: `source` is `notes`, the id is
+`notes:<label>/<file name>`, `title` is the first `# ` heading (the file name
+without `.md` when there is none), `label` is `idea`, `state` is
+`needs_attention` and `severity` is `info`. The item has no actions. It goes
+away when the file is deleted or moved out of the directory.
+
+| `context` key | Value |
+| --- | --- |
+| `path` | absolute path of the file |
+| `dir` | absolute path of the watched directory |
+| `sha256` | hex digest of the file's bytes, so a consumer sees an edit |
+| `captured` | frontmatter `date` as RFC 3339, when present and parseable |
+| `app` | frontmatter `app`, when present |
+
+`updated_at` is the file's modification time. Frontmatter is a leading `---`
+block read as plain `key: value` lines, and only `date` and `app` are looked
+at. A date without a zone is read as UTC.
+
+A directory that does not exist or cannot be read has no items and puts a
+warning in `/health`. The poller keeps running, and the notes appear on the
+poll after the directory does.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and
