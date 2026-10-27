@@ -46,6 +46,10 @@ type Config struct {
 	Calendar  Calendar  `toml:"calendar"`
 	Spend     Spend     `toml:"spend"`
 	Log       Log       `toml:"log"`
+	Datadog   Datadog   `toml:"datadog"`
+	Slack     Slack     `toml:"slack"`
+	Outline   Outline   `toml:"outline"`
+	Notes     Notes     `toml:"notes"`
 }
 
 // Log is the signal log: one JSON line for every item that appears, changes
@@ -142,6 +146,73 @@ type GitHub struct {
 	// the infrastructure is not the same errand as one in a side project, and
 	// severity cannot say so: both are warnings.
 	PriorityRepos []string `toml:"priority_repos"`
+}
+
+// Datadog is the container vulnerability source. It reads the findings
+// endpoint with an API key and an application key, each named by an
+// environment variable so neither lands in a file.
+type Datadog struct {
+	Enabled bool `toml:"enabled"`
+	// Site is the Datadog site, such as datadoghq.eu. The API host is
+	// api.<site>.
+	Site  string   `toml:"site"`
+	Poll  Duration `toml:"poll"`
+	Query string   `toml:"query"`
+	// PageLimit is findings per request. Datadog allows at most 1000.
+	PageLimit int    `toml:"page_limit"`
+	APIKeyEnv string `toml:"api_key_env"`
+	AppKeyEnv string `toml:"app_key_env"`
+	// Fixture replays a recorded response instead of calling the API, and
+	// needs no keys.
+	Fixture string `toml:"fixture"`
+}
+
+// Slack is the source for messages waiting on you. It reads with a user
+// token (xoxp), named by an environment variable so it never lands in a file.
+type Slack struct {
+	Enabled  bool     `toml:"enabled"`
+	TokenEnv string   `toml:"token_env"`
+	Poll     Duration `toml:"poll"`
+	// Lookback is how far back a message still counts.
+	Lookback Duration `toml:"lookback"`
+	// MaxConversations caps how many DMs and group DMs are read per poll.
+	MaxConversations int `toml:"max_conversations"`
+	// Fixture replays a recorded snapshot instead of calling the API, and
+	// needs no token.
+	Fixture string `toml:"fixture"`
+}
+
+// Outline is the mentions source. It lists the notifications of the API
+// key's owner and keeps the unread mentions. The key comes from the
+// environment variable TokenEnv names.
+type Outline struct {
+	Enabled bool `toml:"enabled"`
+	// BaseURL is the origin of the Outline instance, such as
+	// https://app.getoutline.com. It is required unless a fixture is set.
+	BaseURL  string   `toml:"base_url"`
+	TokenEnv string   `toml:"token_env"`
+	Poll     Duration `toml:"poll"`
+	// MaxItems caps how many mentions one poll keeps.
+	MaxItems int `toml:"max_items"`
+	// Fixture replays a recorded response instead of calling the API, and
+	// needs no key.
+	Fixture string `toml:"fixture"`
+}
+
+// Notes is the markdown notes source. It watches the top level of each
+// [[notes.dirs]] directory and makes one item per *.md file.
+type Notes struct {
+	Enabled bool       `toml:"enabled"`
+	Poll    Duration   `toml:"poll"`
+	Dirs    []NotesDir `toml:"dirs"`
+}
+
+// NotesDir is one watched directory. Label prefixes the id of every note in
+// it, so two directories can hold files with the same name.
+type NotesDir struct {
+	// Path is absolute once loaded: a leading ~ is expanded.
+	Path  string `toml:"path"`
+	Label string `toml:"label"`
 }
 
 // Calendar is the meetings source. It reads iCalendar feeds, one per
@@ -260,6 +331,36 @@ func Default() Config {
 			MinLookups:     100,
 		},
 		Log: Log{Retention: Duration(720 * time.Hour)},
+		Datadog: Datadog{
+			// Off: it reaches the network and needs two keys.
+			Enabled:   false,
+			Site:      "datadoghq.eu",
+			Poll:      Duration(30 * time.Minute),
+			Query:     "@finding_type:host_and_container_vulnerability @status:open",
+			PageLimit: 100,
+			APIKeyEnv: "DD_API_KEY",
+			AppKeyEnv: "DD_APP_KEY",
+		},
+		Slack: Slack{
+			// Off: it reaches the network and needs a user token.
+			Enabled:          false,
+			TokenEnv:         "SLACK_USER_TOKEN",
+			Poll:             Duration(5 * time.Minute),
+			Lookback:         Duration(72 * time.Hour),
+			MaxConversations: 30,
+		},
+		Outline: Outline{
+			// Off: it reaches the network and needs a key.
+			Enabled:  false,
+			TokenEnv: "OUTLINE_API_KEY",
+			Poll:     Duration(5 * time.Minute),
+			MaxItems: 100,
+		},
+		Notes: Notes{
+			// Off: it reads directories the user has to name.
+			Enabled: false,
+			Poll:    Duration(time.Minute),
+		},
 	}
 }
 
@@ -347,6 +448,48 @@ func Load(path string, explicit bool) (cfg Config, found bool, err error) {
 	if cfg.Spend.AdvisorCost < 0 || cfg.Spend.LookupsPerNote < 0 || cfg.Spend.MinLookups < 0 {
 		return Default(), false, fmt.Errorf("%s: spend limits: want zero (off) or a positive number", path)
 	}
+	if cfg.Datadog.Enabled {
+		if cfg.Datadog.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: datadog.poll %s: want a period", path, cfg.Datadog.Poll)
+		}
+		if cfg.Datadog.PageLimit < 1 || cfg.Datadog.PageLimit > 1000 {
+			return Default(), false, fmt.Errorf("%s: datadog.page_limit %d: want 1 to 1000",
+				path, cfg.Datadog.PageLimit)
+		}
+		if strings.TrimSpace(cfg.Datadog.Site) == "" && cfg.Datadog.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: datadog.site: want a site such as datadoghq.eu", path)
+		}
+	}
+	if cfg.Slack.Enabled {
+		if cfg.Slack.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: slack.poll %s: want a period", path, cfg.Slack.Poll)
+		}
+		if cfg.Slack.Lookback <= 0 {
+			return Default(), false, fmt.Errorf("%s: slack.lookback %s: want a period", path, cfg.Slack.Lookback)
+		}
+		if cfg.Slack.MaxConversations < 1 {
+			return Default(), false, fmt.Errorf("%s: slack.max_conversations %d: want 1 or more",
+				path, cfg.Slack.MaxConversations)
+		}
+		if strings.TrimSpace(cfg.Slack.TokenEnv) == "" && cfg.Slack.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: slack.token_env: want an environment variable name", path)
+		}
+	}
+	if cfg.Outline.Enabled {
+		if cfg.Outline.Poll <= 0 {
+			return Default(), false, fmt.Errorf("%s: outline.poll %s: want a period", path, cfg.Outline.Poll)
+		}
+		if cfg.Outline.MaxItems < 1 {
+			return Default(), false, fmt.Errorf("%s: outline.max_items %d: want at least 1",
+				path, cfg.Outline.MaxItems)
+		}
+		if strings.TrimSpace(cfg.Outline.BaseURL) == "" && cfg.Outline.Fixture == "" {
+			return Default(), false, fmt.Errorf("%s: outline.base_url: want an origin such as https://app.getoutline.com", path)
+		}
+	}
+	if err := validateNotes(&cfg.Notes); err != nil {
+		return Default(), false, fmt.Errorf("%s: %w", path, err)
+	}
 
 	return cfg, true, nil
 }
@@ -356,4 +499,43 @@ func plural(word string, n int) string {
 		return word
 	}
 	return word + "s"
+}
+
+// validateNotes expands ~ in every directory and checks the table. A relative
+// path would depend on where the daemon was started, so it is refused.
+func validateNotes(n *Notes) error {
+	for i := range n.Dirs {
+		p := strings.TrimSpace(n.Dirs[i].Path)
+		if p == "~" || strings.HasPrefix(p, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("notes.dirs[%d].path %q: cannot expand ~: %w", i, p, err)
+			}
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+		n.Dirs[i].Path = p
+	}
+	if !n.Enabled {
+		return nil
+	}
+	if n.Poll <= 0 {
+		return fmt.Errorf("notes.poll %s: want a period", n.Poll)
+	}
+	if len(n.Dirs) == 0 {
+		return errors.New("notes.dirs: want at least one [[notes.dirs]] entry when notes is enabled")
+	}
+	labels := make(map[string]bool, len(n.Dirs))
+	for i, d := range n.Dirs {
+		if !filepath.IsAbs(d.Path) {
+			return fmt.Errorf("notes.dirs[%d].path %q: want an absolute path or one starting with ~", i, d.Path)
+		}
+		if strings.TrimSpace(d.Label) == "" {
+			return fmt.Errorf("notes.dirs[%d].label: want a label", i)
+		}
+		if labels[d.Label] {
+			return fmt.Errorf("notes.dirs[%d].label %q: already used by another directory", i, d.Label)
+		}
+		labels[d.Label] = true
+	}
+	return nil
 }

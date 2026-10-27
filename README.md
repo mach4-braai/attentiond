@@ -454,6 +454,251 @@ changes, so a label carrying a dollar figure would wake every poll.
 
 Open focuses the session's Herdr pane, the same action the Herdr item carries.
 
+## Datadog
+
+`[datadog]` turns container vulnerability findings into items. Every thirty
+minutes it asks `GET https://api.<site>/api/v2/security/findings` for the
+findings matching `query`, follows `meta.page.after` until Datadog stops
+returning a cursor, and replaces the whole source with the result. It only
+reads. Nothing is written back to Datadog.
+
+It is off by default. The keys come from the environment, from the variables
+`api_key_env` and `app_key_env` name (`DD_API_KEY` and `DD_APP_KEY`). The
+application key needs `security_monitoring_findings_read` or `appsec_vm_read`.
+With either one missing the source stays off and startup names the variable.
+The keys are never logged, and they are scrubbed from every error.
+
+Every finding is one item: `source` is `datadog`, the id is
+`datadog:<finding id>`, `title` is the finding's title, `label` is
+`vulnerability` and `state` is `needs_attention`. Priority is the default for
+that state. Severity follows Datadog's: critical and high are `critical`,
+medium is `warning`, anything else is `info`. The item has no actions.
+
+| `context` key | Datadog field |
+| --- | --- |
+| `finding_id` | `finding_id` |
+| `finding_type` | `finding_type` |
+| `severity` | `severity`, as Datadog spells it |
+| `image` | `container_image.name` |
+| `repo_digest` | first of `container_image.repo_digests` |
+| `package`, `package_version` | `package.name`, `package.version` |
+| `fix_available` | `remediation.is_available`, `true` or `false` |
+| `fixed_version` | first `remediation.package.base` version, else first `remediation.package.closest_no_vulnerabilities` version |
+| `inherited_from_base_image` | `vulnerability.is_inherited_from_base_image`, `true` or `false` |
+| `ecosystem` | `vulnerability.stack.ecosystem` |
+| `status` | `status` |
+| `first_seen_at` | `first_seen_at`, converted from epoch milliseconds to RFC 3339 |
+
+A key is left out when Datadog did not send the field, so an absent
+`fix_available` means Datadog did not say, not that there is no fix. An item's
+`updated_at` is `first_seen_at`, so `stale_after` measures how long a
+vulnerability has been open.
+
+Like GitHub, a failed poll keeps the last good result and sets the error in
+`/health`. When Datadog reports `meta.status` as `timeout` the findings are a
+prefix of the match, and `/health` carries a warning saying so.
+
+To work without keys, point `fixture` at a recorded response.
+`testdata/datadog-findings.json` is one: four findings across two images. The
+file is read on every poll.
+
+## Slack
+
+`[slack]` puts the Slack messages waiting on you on the board. It reads with
+your own user token and never writes: no posting, no reactions, nothing marked
+read.
+
+It is off by default. Create a Slack app, add these **user token** scopes
+under OAuth & Permissions, install it to your workspace and copy the
+`xoxp-` User OAuth Token:
+
+| Scope | Used for |
+| --- | --- |
+| `search:read` | `search.messages`, for mentions and your own replies |
+| `im:read`, `im:history` | `conversations.list` and `conversations.history` on DMs |
+| `mpim:read`, `mpim:history` | the same for group DMs |
+| `users:read` | `users.info`, to show a name instead of a user ID |
+
+Export the token in the environment of the daemon, in the variable
+`token_env` names (`SLACK_USER_TOKEN`), then enable the source:
+
+```toml
+[slack]
+enabled = true
+token_env = "SLACK_USER_TOKEN"
+poll = "5m"
+lookback = "72h"
+max_conversations = 30
+```
+
+With the variable empty the source stays off and startup names the variable.
+The token is never logged and is scrubbed from every error. Without
+`users:read` the sender falls back to the search result's handle, or the user
+ID for a DM.
+
+Each poll calls `auth.test` once to learn your user ID and workspace URL (kept
+after the first success), then reads:
+
+- **Mentions.** `search.messages` with `query=<@you> after:<date>`,
+  `sort=timestamp`, 100 results a page, newest first, up to 5 pages. A second
+  search, `from:<@you> after:<date>`, lists your own messages, paged the same
+  way and read only back to the oldest open mention. A mention disappears once
+  you posted anything later in the same channel, which covers a reply in its
+  thread.
+- **Direct messages.** Slack documents no search modifier for "sent to me in a
+  DM" (only `in:` and `from:`), so attentiond lists `conversations.list`
+  `types=im,mpim` and reads each conversation's `conversations.history` with
+  `oldest` set to the lookback and a limit of 50. Slack gives IMs no activity
+  time, so nothing can rank them: every conversation is read, skipping ones
+  Slack marks `is_user_deleted` or `is_open: false`. Calls are spaced 1.2
+  seconds apart for the Tier 3 rate limit, so 30 conversations take about 40
+  seconds. `max_conversations` is a hard cap, and `/health` warns when it cuts
+  conversations off. A message from someone else counts when you have posted
+  nothing later in that conversation.
+
+A message older than `lookback` is never an item. Your own messages never are.
+Thread replies inside a DM are not read, because `conversations.history`
+returns only top-level messages. That means a mention of you inside a DM
+thread is not seen either.
+
+Every message is one item: `source` is `slack`, the id is
+`slack:<channel id>:<ts>`, `state` is `needs_attention`, `severity` is `info`
+and priority is the default for the state. `label` is `mentioned you` or
+`messaged you`. `title` is `<sender> in #<channel>: <text>` for a mention and
+`<sender> (DM): <text>` for a DM, with the text cut to its first 100
+characters on one line. A mention found inside a DM is reported as a DM.
+`updated_at` is the message time.
+
+| `context` key | Value |
+| --- | --- |
+| `channel` | channel ID |
+| `ts` | message timestamp |
+| `permalink` | Slack's permalink for a mention; built from the workspace URL for a DM |
+| `sender` | display name |
+| `kind` | `mention` or `dm` |
+
+Like Datadog, a failed poll keeps the last good result and sets the error in
+`/health`. On HTTP 429 the next poll waits for the longer of `poll` and the
+`Retry-After` header.
+
+When a bound cuts a poll short, the poll still succeeds and `/health` carries
+a warning: the mention search or the search of your own messages hit its
+5-page bound, or there are more DMs than `max_conversations`.
+
+To work without a token, point `fixture` at a recorded snapshot.
+`testdata/slack-snapshot.json` is one: workspace `example`, users `alice` and
+`bob`, and an `as_of` time so its timestamps stay inside the lookback.
+
+## Outline
+
+`[outline]` shows the documents and comments that mention you. Every five
+minutes it calls `POST <base_url>/api/notifications.list` as the owner of the
+API key, newest first, `limit` 100 at a time with a growing `offset`, and
+keeps the notifications that are all of these:
+
+- `event` is `documents.mentioned` or `comments.mentioned`. Group mentions
+  (`*.group_mentioned`) and every other event are skipped.
+- `viewedAt` is null, so you have not read it.
+- `archivedAt` is null.
+
+Paging stops at `max_items` kept mentions (default 100), at a short page, or
+after 20 pages. The published notification schema carries only `documentId`,
+so each distinct document is looked up once per poll with
+`POST /api/documents.info` for its title and path. A document the key can no
+longer open (403 or 404) still yields the item, titled "mentioned you in a
+document" and without a `url`. It only reads. Nothing is written to Outline,
+and a notification stays unread until you open it in Outline.
+
+It is off by default. To set it up:
+
+1. In Outline open **Settings, API & Apps** and create an API key. The key acts
+   as you, and the notifications it lists are yours. A scoped key needs the
+   endpoint scopes `notifications.list` and `documents.info`, or the broader
+   `notifications.*` and `documents:read`; a key with the global `read` scope
+   also works.
+2. Export it where attentiond runs, in the variable `token_env` names
+   (default `OUTLINE_API_KEY`). The key never goes in the TOML file. With the
+   variable empty the source stays off and startup warns, naming the variable
+   and never the value.
+3. Enable the table:
+
+```toml
+[outline]
+enabled = true
+base_url = "https://app.getoutline.com"   # or your self-hosted origin
+# token_env = "OUTLINE_API_KEY"
+# poll = "5m"
+# max_items = 100
+```
+
+Every mention is one item: `source` is `outline`, the id is
+`outline:<notification id>`, `title` is `<actor> mentioned you in <document
+title>`, `label` is `mentioned you` and `state` is `needs_attention` with
+severity `info`. `updated_at` is the notification's `createdAt`. The item
+disappears on the poll after you read or archive the notification in Outline.
+
+| `context` key | Value |
+| --- | --- |
+| `url` | `base_url` plus the document's `url` path. A comment mention adds `?commentId=<comment id>`, which Outline uses to scroll to the comment. |
+| `actor` | the mentioning user's name |
+| `document` | the document's title |
+| `event` | `documents.mentioned` or `comments.mentioned` |
+
+`url` and `document` are left out when the document could not be read.
+
+Like Datadog, a failed poll keeps the last good result and sets the error in
+`/health`. A server that answers 404 to `notifications.list` predates the
+notifications API. attentiond logs one warning saying so and `/health` shows
+the error; Outline's API reference does not state the first version with the
+endpoint, so upgrade to a current release.
+
+To work without a key, point `fixture` at a recorded `notifications.list`
+response, with each notification's `document` embedded.
+`testdata/outline-notifications.json` is one: two unread mentions, one read
+mention and one reply that is not a mention. The file is read on every poll.
+
+## Notes
+
+`[notes]` turns markdown files into items. It lists the top level of each
+`[[notes.dirs]]` directory every minute (`poll`) and makes one item per `*.md`
+file. It only reads: it never edits or moves a note, and it does not recurse.
+Dotfiles and files over 1 MiB are skipped, and the oversized ones are logged
+once.
+
+```toml
+[notes]
+enabled = true
+
+[[notes.dirs]]
+path = "~/notes/ideas"
+label = "ideas"
+```
+
+It is off by default. With it on there must be at least one directory, every
+path must be absolute once `~` is expanded, and labels must be unique.
+
+Every note is one item: `source` is `notes`, the id is
+`notes:<label>/<file name>`, `title` is the first `# ` heading (the file name
+without `.md` when there is none), `label` is `idea`, `state` is
+`needs_attention` and `severity` is `info`. The item has no actions. It goes
+away when the file is deleted or moved out of the directory.
+
+| `context` key | Value |
+| --- | --- |
+| `path` | absolute path of the file |
+| `dir` | absolute path of the watched directory |
+| `sha256` | hex digest of the file's bytes, so a consumer sees an edit |
+| `captured` | frontmatter `date` as RFC 3339, when present and parseable |
+| `app` | frontmatter `app`, when present |
+
+`updated_at` is the file's modification time. Frontmatter is a leading `---`
+block read as plain `key: value` lines, and only `date` and `app` are looked
+at. A date without a zone is read as UTC.
+
+A directory that does not exist or cannot be read has no items and puts a
+warning in `/health`. The poller keeps running, and the notes appear on the
+poll after the directory does.
+
 ## GitHub integration
 
 attentiond asks GitHub once a minute for three sets of open pull requests and
