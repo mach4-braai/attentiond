@@ -72,70 +72,34 @@ func (d Decision) spent(now time.Time, label string) bool {
 	return false
 }
 
-// Watch is a human asking attentiond to act on one item: run tools on a pull
-// request when it falls into conflict or collects review comments. It is kept
-// beside decisions rather than as one, because a watched pull request can also
-// be snoozed or bumped.
-type Watch struct {
-	Item   string    `json:"item"`
-	MadeAt time.Time `json:"made_at"`
-	// SeenAt is when a source last reported the item, to within seenEvery.
-	SeenAt time.Time `json:"seen_at"`
-}
-
-// watchTTL is how long a watched item can go unreported before its watch is
-// dropped at load. GitHub only reports open pull requests, so this is how a
-// watch ends once its pull request merges or closes.
-const watchTTL = 14 * 24 * time.Hour
-
-// seenEvery is how far SeenAt may lag behind the last poll. Writing the file on
-// every poll to move a timestamp measured in weeks would be churn.
-const seenEvery = 24 * time.Hour
-
 // state is everything the store keeps on disk.
 type state struct {
 	decisions map[string]Decision
-	watches   map[string]Watch
-	jobs      map[string]Job
-	// handled is item id to the comment ids already given to a tool.
-	handled map[string][]string
 }
 
 func emptyState() state {
-	return state{
-		decisions: map[string]Decision{},
-		watches:   map[string]Watch{},
-		jobs:      map[string]Job{},
-		handled:   map[string][]string{},
-	}
+	return state{decisions: map[string]Decision{}}
 }
 
 // decisionFile is the on-disk form: a version and a list, so a future field
-// arrives without guessing at what an older file meant. Version 1 had no
-// watches, jobs or comment cursor and still loads.
+// arrives without guessing at what an older file meant. Version 1 had only
+// decisions. Version 2 files also carry watches, jobs and comment cursors,
+// which are ignored on load and dropped on the next save.
 type decisionFile struct {
 	Version   int        `json:"version"`
 	Decisions []Decision `json:"decisions"`
-	Watches   []Watch    `json:"watches,omitempty"`
-	Jobs      []Job      `json:"jobs,omitempty"`
-	// HandledComments is item id to the comment ids a tool has been given,
-	// so a restart does not hand the same review to an agent twice.
-	HandledComments map[string][]string `json:"handled_comments,omitempty"`
 }
 
 const decisionFileVersion = 2
 
-// loadState reads the decisions and watches written by an earlier run. A
-// missing file is an empty set: no decisions yet is the normal state of a new
-// machine.
+// loadState reads the decisions written by an earlier run. A missing file is
+// an empty set: no decisions yet is the normal state of a new machine.
 //
 // Expired snoozes are dropped here rather than being carried in memory for the
 // life of the process. Decisions about items that never come back cost one map
 // entry each and are cleared the first time their item is seen again, so they
 // are left alone: a pull request absent from one poll because GitHub timed out
-// is not a reason to forget you deferred it. A watch is the exception, dropped
-// once its item has been gone for watchTTL, and so is a finished job that old.
-// A job still queued or running is kept: the runner starts it again.
+// is not a reason to forget you deferred it.
 func loadState(path string, now time.Time) (state, error) {
 	out := emptyState()
 	if path == "" {
@@ -169,24 +133,6 @@ func loadState(path string, now time.Time) (state, error) {
 		}
 		out.decisions[decision.Item] = decision
 	}
-	for _, watch := range file.Watches {
-		if watch.Item == "" || now.Sub(watch.SeenAt) > watchTTL {
-			continue
-		}
-		out.watches[watch.Item] = watch
-	}
-	for _, job := range file.Jobs {
-		if job.Item == "" || (!job.Pending() && now.Sub(job.latest()) > watchTTL) {
-			continue
-		}
-		out.jobs[job.Item] = job
-	}
-	// A cursor is only read while its item is watched.
-	for item, ids := range file.HandledComments {
-		if _, watched := out.watches[item]; watched && len(ids) > 0 {
-			out.handled[item] = ids
-		}
-	}
 	return out, nil
 }
 
@@ -204,28 +150,13 @@ func saveState(path string, saved state) error {
 		Version:   decisionFileVersion,
 		Decisions: make([]Decision, 0, len(saved.decisions)),
 	}
-	if len(saved.handled) > 0 {
-		file.HandledComments = saved.handled
-	}
 	for _, decision := range saved.decisions {
 		file.Decisions = append(file.Decisions, decision)
-	}
-	for _, watch := range saved.watches {
-		file.Watches = append(file.Watches, watch)
-	}
-	for _, job := range saved.jobs {
-		file.Jobs = append(file.Jobs, job)
 	}
 	// Sorted so that a file a human opens reads the same way twice, and so a
 	// diff of it shows what changed rather than what moved.
 	sort.Slice(file.Decisions, func(a, b int) bool {
 		return file.Decisions[a].Item < file.Decisions[b].Item
-	})
-	sort.Slice(file.Watches, func(a, b int) bool {
-		return file.Watches[a].Item < file.Watches[b].Item
-	})
-	sort.Slice(file.Jobs, func(a, b int) bool {
-		return file.Jobs[a].Item < file.Jobs[b].Item
 	})
 
 	data, err := json.MarshalIndent(file, "", "  ")

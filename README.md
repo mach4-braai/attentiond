@@ -1,6 +1,6 @@
 # attentiond
 
-Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON and as a web page.
+Local daemon holding one normalized view of what currently needs attention: it takes semantic lifecycle events from tools such as Herdr, command wrappers and GitHub, maps them onto the states working, waiting, needs_attention, done and failed, and serves them over localhost HTTP/JSON.
 
 It holds state, answers questions about it, and decides when a change is
 worth interrupting somebody for.
@@ -13,18 +13,18 @@ flowchart LR
     omp["omp stats.db"] -- "sqlite, read-only" --> attentiond
     future["future tools"] -. "POST /api/events" .-> attentiond
 
-    attentiond["attentiond"] -- "GET /, HTTP/JSON" --> page["Browser page"]
-    page -- "POST /api/actions/…" --> attentiond
+    attentiond["attentiond"] -- "HTTP/JSON" --> consumer["Local consumers"]
+    consumer -- "POST /api/actions/…" --> attentiond
 
     attentiond -- "focus pane, tab, workspace" --> herdr
     attentiond -- "notification.show" --> herdr
     attentiond -- "Notification Center" --> desktop["macOS"]
 ```
 
-Sources push or are polled; the page only reads and asks attentiond to
-act. The arrow back into Herdr putting you in front of the work is the point
-of the daemon holding state at all. The two notification arrows are one or the
-other: `[notify] route` picks which.
+Sources push or are polled; consumers read and ask attentiond to act. The
+arrow back into Herdr putting you in front of the work is the point of the
+daemon holding state at all. The two notification arrows are one or the other:
+`[notify] route` picks which.
 
 ## Run it
 
@@ -33,41 +33,7 @@ go run ./cmd/attentiond                 # against a live Herdr server
 go run ./cmd/attentiond --herdr-fixture testdata/session-snapshot.json
 ```
 
-Then open <http://127.0.0.1:7717/>.
-
-## Tools
-
-The three scripts in `tools/` take an `owner/repo` and a PR number. Set
-`ATTENTIOND_CHECKOUT` to the absolute path of a local clone with an `origin`
-remote. Each script fetches the PR head and base, works in its own detached
-worktree, and removes that worktree on exit, including on SIGTERM. The caller
-captures stdout and stderr as the run log.
-
-| Script | Action |
-| --- | --- |
-| `rebase.sh` | Rebase onto the base without a model; push with a lease, or report conflicting files. |
-| `agent-rebase.sh` | Ask omp to resolve clear conflicts; push with a lease only after checking the result. |
-| `agent-comments.sh` | Give omp the runner's filtered `$ATTENTIOND_COMMENTS` JSON file; push a committed fix without force, or ask for human review. |
-
-Run one by hand from the repository root:
-
-```bash
-ATTENTIOND_CHECKOUT=/absolute/path/to/clone tools/rebase.sh owner/repo 123
-```
-
-For `agent-comments.sh`, also set `ATTENTIOND_COMMENTS` to the path of the
-runner-filtered JSON file. The runner, not the script, checks comment authors
-against its allowlist. Do not pass unfiltered comments to the script. The
-comment policy does not allow tests yet; review and run them before relying on
-a pushed fix. Agent sessions use `anthropic/claude-sonnet-5-5` with medium
-thinking unless `ATTENTIOND_MODEL` or `ATTENTIOND_THINKING` overrides it.
-
-The final `RESULT:` line is the runner's outcome. `rebased <sha>` and
-`pushed <sha>` mean the wrapper pushed; `up-to-date` means no rebase was
-needed; `needs-conflicts <files>` means a plain rebase hit conflicts; and
-`needs-human <reason>` means the agent declined or the wrapper refused to
-push. The agent's own `committed` result is internal to its wrapper. A missing
-result or a killed run counts as failed.
+Then read the board with `curl -sS localhost:7717/api/work`.
 
 ## Configuration
 
@@ -106,7 +72,7 @@ ttl = "1h"                     # how long finished /api/events items stay visibl
 [notify]
 enabled = true
 route = "herdr"                # herdr or system; see below
-labels = ["ready to merge", "checks running", "needs human", "agent failed"]
+labels = ["ready to merge", "checks running"]
 
 [herdr]
 enabled = true
@@ -132,18 +98,6 @@ sync = ["omp", "stats", "--summary"]   # indexes new turns before each read; [] 
 advisor_cost = 25              # dollars per advisor transcript; 0 is off
 lookups_per_note = 20          # advisor read/grep/glob calls per advise call; 0 is off
 min_lookups = 100              # lookups before the ratio counts
-
-[tools]
-enabled = false                # runs scripts on watched pull requests; see below
-# dir = "tools"                # required when enabled; relative to this file
-# log_dir = ""                 # default: runs/ beside state_file
-comment_authors = []           # logins agent-comments acts on; empty means never
-comment_quiet = "2m"           # newest comment must be this old before a run
-rebase_behind = false          # also rebase a pull request that is only behind
-timeouts = { rebase = "10m", agent-rebase = "45m", agent-comments = "45m" }
-
-[tools.checkouts]              # owner/name = local clone; ~ is your home
-# "example-org/infra" = "~/src/infra"
 ```
 
 A file only has to say what it changes; anything absent keeps its default. A
@@ -233,7 +187,7 @@ already knows:
 the store and the API filters reason about. `label` is the specific reason, and
 two labels often share a state. A pull request that is `review requested` and
 one that is `ready to merge` are both `needs_attention`, and the difference is
-the whole point of looking at the dashboard. Sources that have no better word
+the whole point of looking at the queue. Sources that have no better word
 leave both unset and get the state's own.
 
 `tone` is a closed set, so a consumer maps six values onto a palette instead of
@@ -284,8 +238,6 @@ These fields carry what a human decided rather than what a source observed:
 | --- | --- |
 | `snoozed`, `snoozed_until` | deferred; out of `/api/attention`, still on the board. No `snoozed_until` means it lasts until the label changes |
 | `bumped` | raised to 110 by hand, and exempt from going stale |
-| `watched` | a pull request you authored that attentiond may act on |
-| `job` | the latest tool run on the item; see `GET /api/jobs` |
 | `stale` | nothing has happened to it for longer than `stale_after`; served only by `/api/stale` |
 
 `attention` is derived from `state`, so a consumer never has to restate the
@@ -372,69 +324,6 @@ Decisions are written to `[daemon] state_file` as they are made and reloaded at
 startup, expired snoozes dropped. Items are not persisted; every source rebuilds
 those within a poll, and no source can rebuild a decision you made. A file that
 cannot be read costs a warning rather than the daemon.
-
-`watch` and `unwatch` mark a pull request you authored as one attentiond may
-act on. They sit beside the decision rather than replacing it, so a watched
-pull request can still be snoozed or bumped, and `clear` leaves the watch
-alone. Both need the request header `X-Attentiond: 1` and answer `403` without
-it:
-
-```bash
-curl -sS -X POST -H 'X-Attentiond: 1' \
-  'localhost:7717/api/items/github:example-org%2Finfra%2342/watch'
-```
-
-A custom header makes a browser send a CORS preflight first, and attentiond
-never answers one, so a web page you happen to have open cannot start agents
-on your branches. Watch answers `400` for anything but a GitHub pull request
-with `context.role` of `author`. Items that qualify carry a `watch` action, and
-watched ones an `unwatch` action.
-
-Watches are kept in the same file. A watch whose pull request has not been
-reported for 14 days is dropped at the next start: GitHub only reports open
-pull requests, so that is a pull request that merged or closed.
-
-`clear` also dismisses a finished job. A queued or running one stays, because
-its tool has yet to report. An item with a finished job carries a `clear`
-action labelled `Dismiss`.
-
-### `GET /api/jobs`
-
-The items a tool is working on or has reported on, newest job first, in the
-same envelope as `/api/work`. Stale items are included: a tool that finished on
-a quiet pull request still has something to say.
-
-```json
-"job": {
-  "item": "github:example-org/infra#42",
-  "tool": "rebase",
-  "status": "finished",
-  "result": "needs-conflicts",
-  "detail": "main.tf variables.tf",
-  "log": "/Users/me/.local/state/attentiond/runs/github_example-org_tofu_42-rebase-20260912T120000Z.log",
-  "queued_at": "2026-09-12T12:00:00Z",
-  "started_at": "2026-09-12T12:00:00Z",
-  "finished_at": "2026-09-12T12:00:41Z"
-}
-```
-
-`status` is `queued`, `running` or `finished`. `result` is the word the tool
-printed on its `RESULT:` line, or `failed` when it printed none or ran out of
-time. While a job exists it changes how its item reads:
-
-| Job | `label` | `tone` | `state` |
-| --- | --- | --- | --- |
-| queued or running | `agent <tool>` | `active` | `working` |
-| finished, `needs-human` | `needs human` | `attention` | `needs_attention` |
-| finished, `failed` | `agent failed` | `failed` | `needs_attention` |
-| finished, anything else | the source's own | the source's own | the source's own |
-
-A running tool takes its item out of `/api/attention`, because nothing is
-waiting on you. A tool that gives up puts it back with a label that says so,
-and the label change ends any snooze, so `needs human` and `agent failed`
-notify even on a snoozed item. The job stays on the item until the next job
-starts or you dismiss it. Jobs are kept in `[daemon] state_file` with the
-decisions.
 
 ### `GET /health`
 
@@ -641,125 +530,9 @@ the data: `/health` carries it on the source, and `/api/work` and
 can say so. `healthy` stays true, because the adapter works; the answer is just
 not the whole answer.
 
-## Watching pull requests
-
-Some pull request chores are routine: a branch falls into conflict with its
-base, or a reviewer leaves a few clear comments. Watch one of your own pull
-requests and attentiond runs a tool on it when that happens. You get pinged
-only when the tool cannot finish the job.
-
-Click Watch on the item, or post with the header:
-
-```bash
-curl -sS -X POST -H 'X-Attentiond: 1' \
-  'localhost:7717/api/items/github:example-org%2Finfra%2342/watch'
-```
-
-Only a pull request you authored can be watched. Unwatch takes it back. A
-watch ends by itself 14 days after the pull request stops appearing in the
-GitHub poll, which happens once it merges or closes.
-
-### Tools
-
-A tool is a script, `<dir>/<tool>.sh`, started as a child process with the
-repository and the pull request number:
-
-```
-tools/rebase.sh example-org/infra 42
-```
-
-| Tool | Runs when |
-| --- | --- |
-| `rebase` | the pull request becomes `DIRTY` or `CONFLICTING`, or `BEHIND` with `rebase_behind = true` |
-| `agent-rebase` | right after `rebase` reports `needs-conflicts` |
-| `agent-comments` | there are unhandled comments from `comment_authors`, and the newest is older than `comment_quiet` |
-
-`rebase` fires when the merge state starts to call for one, not on every check
-while it does. GitHub keeps reporting a conflict until it recomputes after the
-push, and a conflict no tool could resolve stays a conflict. Without that rule
-the same pair of tools would run again every few seconds.
-
-Each item runs one tool at a time. A trigger that arrives while a tool is
-running waits behind it, and the same tool never waits twice. attentiond starts
-the script with its working directory and `ATTENTIOND_CHECKOUT` set to the
-clone named in `[tools.checkouts]`. `agent-comments` also gets
-`ATTENTIOND_COMMENTS`, the path of a JSON file holding the comments to address.
-A repository with no checkout configured fails at once with
-`no checkout configured for <repo>`.
-
-stdout and stderr go to one log file per run, under `log_dir`, and the item's
-`job.log` points at it. The last line matching `RESULT: <word> <detail>` is
-the result. A script that prints no such line fails. So does one that runs past
-its timeout: attentiond sends SIGTERM to its whole process group, then SIGKILL
-ten seconds later. While a tool runs, the item reads `agent <tool>`. A result of
-`needs-human` or `failed` turns it into `needs human` or `agent failed` and
-sends a notification; any other result leaves the GitHub label in place. See
-`GET /api/jobs` for the full table.
-
-A restart reruns from scratch any job it finds queued or running, once GitHub
-reports the pull request again. That covers a daemon stopped mid-run, since
-shutdown leaves the interrupted job marked as running. With `[tools]` turned
-off, those jobs are marked failed instead, so no item claims a tool is working
-on it forever.
-
-### Comments
-
-attentiond reads comments only for watched pull requests, once per
-`[github] poll`: issue comments, review bodies and comments on lines of the
-diff. A comment counts as unhandled when no tool has been given it yet and it
-was written after the watch began. Watching asks for help with what comes next,
-not for every old conversation to be reopened.
-
-The ids given to `agent-comments` are kept in `[daemon] state_file`, so a
-restart does not hand the same review to an agent twice. They count as handled
-whatever the result. A comment the tool failed on would fail again every quiet
-period, and the result has already put the pull request in front of you.
-
-### Configuration
-
-```toml
-[tools]
-enabled = true
-dir = "tools"
-comment_authors = ["alice", "bob"]
-timeouts = { agent-comments = "30m" }
-
-[tools.checkouts]
-"example-org/infra" = "~/src/infra"
-```
-
-`dir` is required when `enabled` is on, and a relative path is resolved against
-the directory of the config file, not the binary: `go run` puts the binary in a
-temporary directory. A missing directory fails startup. Checkout paths expand
-`~` and resolve the same way. `log_dir` defaults to `runs/` beside the state
-file. A tool missing from `timeouts` keeps its default: ten minutes for
-`rebase`, 45 for the agent tools.
-
-### Trust model
-
-Tools push to your branches with your credentials, so the rules sit with who
-can start one and what reaches it:
-
-- attentiond listens on loopback only. `watch` and `unwatch` need the header
-  `X-Attentiond: 1`, and a browser has to send a CORS preflight before a
-  request with a custom header. attentiond never answers one, so a web page
-  open in your browser cannot watch a pull request for you.
-- Only pull requests you authored can be watched. Anybody else's branch is not
-  yours to push to.
-- Comment authors are filtered inside the GitHub client, before anything
-  reaches the runner. Only logins in `comment_authors` pass, bot accounts never
-  pass even when listed, and an empty list passes nobody. Text from a stranger
-  never reaches an agent.
-- attentiond runs no git and no model itself. It starts the scripts in `dir`
-  as you, so whatever is in that directory runs with your access. The scripts
-  take a lease before they push, so a rerun after a restart cannot overwrite
-  somebody else's push.
-- Run logs can hold whatever a tool printed. They are written readable by you
-  only.
-
 ## Notifications
 
-A dashboard answers "what is waiting on me" for somebody who is looking at it.
+The queue answers "what is waiting on me" for somebody who is looking at it.
 `[notify]` is the other half: the change worth hearing about while you are
 looking at something else.
 
@@ -801,7 +574,7 @@ Three rules keep it quiet enough to stay useful:
 
 The cost is that a change happening while the daemon is down is never
 announced. The item is still at the top of the queue when the daemon returns,
-which is the fallback the dashboard exists to be.
+which is the fallback the queue exists to be.
 
 ## Staleness
 
@@ -811,48 +584,12 @@ period.
 
 The clock is the item's own. For a pull request that is the last push, review
 or comment, so a month-old entry means a month of nobody touching the work, not
-a month of you ignoring the dashboard. A bump exempts an item, which is also
+a month of you ignoring the queue. A bump exempts an item, which is also
 how you pull one back out of the stale list.
 
 Nothing is dropped silently: `/api/work` carries `stale_count`, so a board that
 is not the whole picture says how much it is missing. This is the same promise
 the capped GitHub search makes through `warnings`.
-
-## The page
-
-attentiond serves a page at `GET /`, for example <http://127.0.0.1:7717/>. It
-is one HTML file, one script and one stylesheet, embedded in the binary from
-`internal/ui`. There is no build step and the page makes no request to any
-other host.
-
-From the top it shows:
-
-- Needs me: `/api/attention`.
-- Agents working: jobs that are `queued` or `running`, from `/api/jobs`, with
-  the tool, when it started and the log path.
-- Agent finished: finished jobs, with the result, the detail and the log path.
-- All work: `/api/work`, with `stale_count` as "N stale, below".
-- Stale: `/api/stale`, collapsed.
-
-Agent sections are hidden when `/api/jobs` answers 404. Spend items are in All
-work.
-
-Each row shows the label with a glyph for its tone (`>` ready, `!` attention,
-`x` failed, `~` active, `.` done), so colour is never the only signal. `zz`
-marks a snoozed item, `^` a bumped one, and Watched an item attentiond acts
-on. Warnings from any source appear above the lists.
-
-The page refreshes every 5 seconds and pauses while its tab is hidden.
-
-It renders whatever actions an item carries, so new controls arrive without
-the page knowing what they are. A `GET` action is a link that opens in a new
-tab. Any other action is a button that sends `fetch` to the action's path on
-the origin the page came from, with the header `X-Attentiond: 1`. Using the
-path and not the whole URL means a `--public-url` that differs from the
-address in the address bar does not turn into a cross-origin request.
-Clicking Open focuses the Herdr pane, and Snooze or Bump changes the queue,
-without leaving the page. A failed action shows the daemon's `error` next to
-its button.
 
 ## What is kept, and where
 
@@ -861,12 +598,8 @@ a restart, GitHub items within a minute, spend items within one `[spend]` poll,
 and event items are lost, which is the one real cost and is acceptable while
 the producers are builds and tests someone is watching.
 
-Snoozes, bumps and watches are on disk, in `[daemon] state_file`. They are the only
+Snoozes and bumps are on disk, in `[daemon] state_file`. They are the only
 state here that no source can reproduce: GitHub knows whether a pull request is
 mergeable, and nothing but this file knows you decided to leave it until
 Monday. See [docs/decision-brief.md](docs/decision-brief.md) for the reasoning
 and for the rest of the MVP design.
-
-The same file holds each item's latest tool job and the ids of the comments
-tools have already been given, so a restart neither forgets a result nor
-replays a review. Run logs go to `[tools] log_dir`.
