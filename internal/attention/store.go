@@ -55,6 +55,13 @@ type StoreConfig struct {
 	// the tests want and what a daemon with no writable state directory
 	// falls back to.
 	DecisionPath string
+	// SignalLogPath is the JSON Lines file every appearance, change and
+	// disappearance is appended to. Empty keeps no log.
+	SignalLogPath string
+	// SignalRetention is how long a signal log entry is kept. Entries older
+	// than this are dropped by a rewrite at most once an hour. Zero keeps
+	// them forever.
+	SignalRetention time.Duration
 	// Observer is called with every transition, outside the store lock, after
 	// the write that produced it. It must not block.
 	Observer func([]Transition)
@@ -85,6 +92,15 @@ type Store struct {
 	cfg        StoreConfig
 	log        *slog.Logger
 	now        func() time.Time
+	// signals is the append-only record of appearances, changes and
+	// disappearances. Nil when no path is configured.
+	signals *signalLog
+	// pending holds entries queued under mu that flushSignals has yet to
+	// write.
+	pending []SignalEntry
+	// restored is the newest log entry per item at start, for the first
+	// time a source reports each item.
+	restored map[string]SignalEntry
 }
 
 // NewStore returns a store holding the decisions an earlier run left behind.
@@ -105,13 +121,49 @@ func NewStore(log *slog.Logger, cfg StoreConfig) *Store {
 	} else if len(saved.decisions) > 0 {
 		log.Info("decisions restored", "path", cfg.DecisionPath, "count", len(saved.decisions))
 	}
-	return &Store{
+	store := &Store{
 		items:     make(map[string]Item),
 		decisions: saved.decisions,
 		cfg:       cfg,
 		log:       log,
 		now:       now,
 	}
+	if cfg.SignalLogPath != "" {
+		store.signals = &signalLog{path: cfg.SignalLogPath, retention: cfg.SignalRetention, now: now}
+		last, err := store.signals.lastByItem()
+		if err != nil {
+			log.Warn("signal log not read at start", "path", cfg.SignalLogPath, "error", err)
+		}
+		store.restored = last
+	}
+	return store
+}
+
+// firstSighting is the log entry for an item the store did not hold. After a
+// restart the log's newest entry for the item says what the log already
+// knows: the same state, label, title and severity logs nothing (the zero
+// entry), a different one logs a change from it, and no entry or a disappearance logs an
+// appearance. It assumes the lock is held, and each restored entry is used
+// once.
+func (s *Store) firstSighting(next Item) SignalEntry {
+	last, ok := s.restored[next.ID]
+	delete(s.restored, next.ID)
+	if !ok || last.Kind == SignalDisappeared {
+		return signalEntry(s.now(), SignalAppeared, next)
+	}
+	entry := signalEntry(s.now(), SignalChanged, next)
+	if last.State == entry.State && last.Label == entry.Label &&
+		last.Title == entry.Title && last.Severity == entry.Severity {
+		return SignalEntry{}
+	}
+	entry.PrevState, entry.PrevLabel = last.State, last.Label
+	if last.Severity != entry.Severity {
+		entry.PrevSeverity = last.Severity
+	}
+	if last.Title != entry.Title {
+		entry.PrevTitle = last.Title
+	}
+	return entry
 }
 
 // ReplaceSource swaps the full set of items owned by one adapter. Items the
@@ -144,9 +196,11 @@ func (s *Store) ReplaceSource(source string, items []Item) {
 		delete(s.items, id)
 		s.log.Info("item removed",
 			"item_id", id, "source", item.Source, "state", string(item.State))
+		s.signal(signalEntry(now, SignalDisappeared, item))
 	}
 	s.mu.Unlock()
 
+	s.flushSignals()
 	s.observe(transitions)
 }
 
@@ -169,6 +223,7 @@ func (s *Store) Put(item Item) Item {
 	transitions = s.record(transitions, prev, existed, item)
 	s.mu.Unlock()
 
+	s.flushSignals()
 	s.observe(transitions)
 	return item
 }
@@ -178,6 +233,7 @@ func (s *Store) Put(item Item) Item {
 // the board without them filters on Item.Stale, and /api/stale is the list
 // that has nothing else.
 func (s *Store) Items() []Item {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -186,6 +242,7 @@ func (s *Store) Items() []Item {
 
 // Get returns one item as every list would show it.
 func (s *Store) Get(key string) (Item, bool) {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -200,6 +257,7 @@ func (s *Store) Get(key string) (Item, bool) {
 // attention state, minus anything snoozed, stale, or done for longer than
 // DoneTTL.
 func (s *Store) Attention() []Item {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -208,6 +266,7 @@ func (s *Store) Attention() []Item {
 
 // Board returns the live items and the counts that go beside them.
 func (s *Store) Board() Board {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -339,6 +398,7 @@ func (s *Store) persist(generation uint64, saved state) {
 
 // CountBySource returns how many live items each source currently owns.
 func (s *Store) CountBySource() map[string]int {
+	defer s.flushSignals()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep()
@@ -391,6 +451,7 @@ func (s *Store) sweep() {
 		delete(s.items, id)
 		s.log.Info("item expired",
 			"item_id", id, "source", item.Source, "state", string(item.State))
+		s.signal(signalEntry(now, SignalDisappeared, item))
 	}
 }
 
@@ -485,7 +546,15 @@ func (s *Store) record(transitions []Transition, prev Item, existed bool, next I
 			"from", transitionWord(prev), "to", transitionWord(next),
 			"severity", string(next.Severity), "title", next.Title)
 	default:
+		if existed && changed(prev, next) {
+			s.signal(changeEntry(s.now(), prev, next))
+		}
 		return transitions
+	}
+	if existed {
+		s.signal(changeEntry(s.now(), prev, next))
+	} else {
+		s.signal(s.firstSighting(next))
 	}
 	return s.transition(transitions, prev, existed, next)
 }
@@ -518,4 +587,31 @@ func (s *Store) observe(transitions []Transition) {
 		return
 	}
 	s.cfg.Observer(transitions)
+}
+
+// signal queues one entry for the signal log. It assumes the lock is held;
+// flushSignals writes the queue once the lock is free.
+func (s *Store) signal(entry SignalEntry) {
+	if s.signals == nil || entry.Kind == "" {
+		return
+	}
+	s.pending = append(s.pending, entry)
+}
+
+// flushSignals appends the queued entries to the signal log. It takes the lock
+// only to drain the queue, so a slow disk never stalls a poll or a read. A
+// failed write is logged and dropped: the slog line for the same change is
+// already out.
+func (s *Store) flushSignals() {
+	if s.signals == nil {
+		return
+	}
+	s.mu.Lock()
+	entries := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+
+	if err := s.signals.append(entries); err != nil {
+		s.log.Warn("signal log not written", "path", s.signals.path, "error", err)
+	}
 }

@@ -52,6 +52,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/work", s.work)
 	mux.HandleFunc("GET /api/attention", s.attention)
 	mux.HandleFunc("GET /api/stale", s.stale)
+	mux.HandleFunc("GET /api/log", s.signalLog)
 	mux.HandleFunc("POST /api/events", s.ingestEvent)
 	mux.HandleFunc("POST /api/actions/{source}/{kind}/{target}/{action}", s.runAction)
 	mux.HandleFunc("POST /api/items/{key}/{decision}", s.decide)

@@ -221,3 +221,141 @@ func TestGitHubIsOffUntilAFileTurnsItOn(t *testing.T) {
 		t.Errorf("github = %+v", cfg.GitHub)
 	}
 }
+
+func TestSignalLogKeepsThirtyDaysUntilAFileSaysOtherwise(t *testing.T) {
+	log := Default().Log
+	if log.Path != "" || log.Retention.Std() != 720*time.Hour {
+		t.Fatalf("defaults = %+v, want an empty path and 720h", log)
+	}
+
+	cfg, _, err := Load(write(t, "[log]\npath = \"/tmp/signals.jsonl\"\nretention = \"48h\"\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Path != "/tmp/signals.jsonl" || cfg.Log.Retention.Std() != 48*time.Hour {
+		t.Fatalf("log = %+v", cfg.Log)
+	}
+
+	if _, _, err := Load(write(t, "[log]\nretention = \"-1h\"\n"), true); err == nil {
+		t.Fatal("a negative retention was accepted")
+	}
+}
+
+func TestDatadogDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := cfg.Datadog
+	if d.Enabled || d.Site != "datadoghq.eu" || d.Poll.Std() != 30*time.Minute ||
+		d.Query != "@finding_type:host_and_container_vulnerability @status:open" ||
+		d.PageLimit != 100 || d.APIKeyEnv != "DD_API_KEY" || d.AppKeyEnv != "DD_APP_KEY" || d.Fixture != "" {
+		t.Errorf("datadog defaults = %+v", d)
+	}
+
+	for body, want := range map[string]string{
+		"[datadog]\nenabled = true\npage_limit = 0\n":    "datadog.page_limit",
+		"[datadog]\nenabled = true\npage_limit = 1001\n": "datadog.page_limit",
+		"[datadog]\nenabled = true\npoll = \"0s\"\n":     "datadog.poll",
+		"[datadog]\nenabled = true\nsite = \"\"\n":       "datadog.site",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[datadog]\nenabled = true\nsite = \"\"\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no site: %v", err)
+	}
+}
+
+func TestSlackDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Slack
+	if s.Enabled || s.TokenEnv != "SLACK_USER_TOKEN" || s.Poll.Std() != 5*time.Minute ||
+		s.Lookback.Std() != 72*time.Hour || s.MaxConversations != 30 || s.Fixture != "" {
+		t.Errorf("slack defaults = %+v", s)
+	}
+
+	for body, want := range map[string]string{
+		"[slack]\nenabled = true\npoll = \"0s\"\n":         "slack.poll",
+		"[slack]\nenabled = true\nlookback = \"0s\"\n":     "slack.lookback",
+		"[slack]\nenabled = true\nmax_conversations = 0\n": "slack.max_conversations",
+		"[slack]\nenabled = true\ntoken_env = \"\"\n":      "slack.token_env",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[slack]\nenabled = true\ntoken_env = \"\"\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no token variable: %v", err)
+	}
+}
+
+func TestOutlineDefaultsAndValidation(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := cfg.Outline
+	if o.Enabled || o.BaseURL != "" || o.TokenEnv != "OUTLINE_API_KEY" ||
+		o.Poll.Std() != 5*time.Minute || o.MaxItems != 100 || o.Fixture != "" {
+		t.Errorf("outline defaults = %+v", o)
+	}
+
+	for body, want := range map[string]string{
+		"[outline]\nenabled = true\n":                                          "outline.base_url",
+		"[outline]\nenabled = true\nbase_url = \"https://x\"\npoll = \"0s\"\n": "outline.poll",
+		"[outline]\nenabled = true\nbase_url = \"https://x\"\nmax_items = 0\n": "outline.max_items",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	if _, _, err := Load(write(t, "[outline]\nenabled = true\nfixture = \"f.json\"\n"), true); err != nil {
+		t.Errorf("a fixture needs no base_url: %v", err)
+	}
+}
+
+func TestNotesIsOffAndExpandsTilde(t *testing.T) {
+	cfg, _, err := Load("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notes.Enabled || cfg.Notes.Poll.Std() != time.Minute || len(cfg.Notes.Dirs) != 0 {
+		t.Errorf("notes defaults = %+v", cfg.Notes)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg, _, err = Load(write(t, "[notes]\nenabled = true\n[[notes.dirs]]\npath = \"~/notes/ideas\"\nlabel = \"ideas\"\n"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Notes.Dirs[0].Path, filepath.Join(home, "notes", "ideas"); got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+}
+
+func TestNotesValidation(t *testing.T) {
+	for body, want := range map[string]string{
+		"[notes]\nenabled = true\n": "notes.dirs",
+		"[notes]\nenabled = true\n[[notes.dirs]]\npath = \"relative/dir\"\nlabel = \"a\"\n":                                             "absolute",
+		"[notes]\nenabled = true\n[[notes.dirs]]\npath = \"/tmp/a\"\nlabel = \"x\"\n[[notes.dirs]]\npath = \"/tmp/b\"\nlabel = \"x\"\n": "label",
+		"[notes]\nenabled = true\npoll = \"0s\"\n[[notes.dirs]]\npath = \"/tmp/a\"\nlabel = \"x\"\n":                                    "notes.poll",
+	} {
+		if _, _, err := Load(write(t, body), true); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Load(%q) err = %v, want mention of %s", body, err, want)
+		}
+	}
+
+	// Disabled notes need no directories.
+	if _, _, err := Load(write(t, "[notes]\nenabled = false\n"), true); err != nil {
+		t.Errorf("disabled notes rejected: %v", err)
+	}
+}

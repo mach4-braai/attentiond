@@ -191,3 +191,116 @@ sync = ["omp", "stats", "--summary"]
 advisor_cost = 25          # dollars
 lookups_per_note = 20      # read, grep and glob calls per advise call
 min_lookups = 100          # below this many lookups the ratio is not judged
+
+[log]
+# The signal log: one JSON line for every item that appears, changes state or
+# label, or disappears, served at GET /api/log. Empty path resolves to
+# $XDG_STATE_HOME/attentiond/signals.jsonl, beside the decisions file.
+# path = ""
+
+# Entries older than this are dropped by a rewrite at most once an hour. Zero
+# keeps everything.
+retention = "720h"
+
+[datadog]
+# Container vulnerability findings from Datadog, each one an item labelled
+# "vulnerability". attentiond only reads: it never changes a finding in Datadog.
+# Off by default: it reaches the network and needs two keys.
+enabled = false
+
+# Your Datadog site. The API host is api.<site>, so the EU1 default reads
+# https://api.datadoghq.eu.
+site = "datadoghq.eu"
+
+# Findings change slowly and the search is heavy, so this is not a fast poll.
+poll = "30m"
+
+# Datadog findings search. Narrow it with more facets, for example
+# "@container_image.name:*web-api*" or "@severity:(critical OR high)".
+query = "@finding_type:host_and_container_vulnerability @status:open"
+
+# Findings per request, 1 to 1000. Pages are followed until Datadog stops
+# returning a cursor, so this is request size, not a cap.
+page_limit = 100
+
+# The environment variables holding the keys. Never put a key in this file. The
+# application key needs the security_monitoring_findings_read or appsec_vm_read
+# permission. With either variable empty the source stays off and startup says
+# which one is missing.
+api_key_env = "DD_API_KEY"
+app_key_env = "DD_APP_KEY"
+
+# Replay a recorded response instead of calling the API. Read on every poll and
+# needs no keys:
+#   fixture = "testdata/datadog-findings.json"
+# fixture = ""
+
+[slack]
+# Slack messages waiting on you, each one an item: mentions of you, and DMs and
+# group DMs where someone else spoke last. attentiond only reads: it never
+# posts, reacts or marks anything read.
+# Off by default: it reaches the network and needs a user token (xoxp).
+enabled = false
+
+# The environment variable holding the user token. Never put the token in this
+# file. User scopes: search:read, im:read, im:history, mpim:read, mpim:history,
+# users:read. With the variable empty the source stays off and startup says so.
+token_env = "SLACK_USER_TOKEN"
+
+poll = "5m"
+
+# How far back a message still counts. Older ones are never items.
+lookback = "72h"
+
+# DMs and group DMs read per poll, most recently updated first.
+max_conversations = 30
+
+# Replay a recorded snapshot instead of calling the API. Read on every poll and
+# needs no token:
+#   fixture = "testdata/slack-snapshot.json"
+
+[outline]
+# Unread mentions of you in Outline, each one an item labelled "mentioned you".
+# attentiond only reads: it never marks a notification read or archived. Off by
+# default: it reaches the network and needs an API key.
+enabled = false
+
+# The origin of your Outline instance, self-hosted or hosted. Required when
+# enabled, unless a fixture is set.
+base_url = "https://app.getoutline.com"
+
+# How often to ask for notifications.
+poll = "5m"
+
+# The most mentions one poll keeps. Pages of 100 are fetched until this many
+# are found or the notifications run out.
+max_items = 100
+
+# The environment variable holding the API key (Settings, API & Apps in
+# Outline). Never put a key in this file. The key needs the notifications.list
+# and documents.info scopes. With the variable empty the source stays off and
+# startup says so.
+token_env = "OUTLINE_API_KEY"
+
+# Replay a recorded notifications.list response instead of calling the API.
+# Read on every poll and needs no key:
+#   fixture = "testdata/outline-notifications.json"
+# fixture = ""
+
+[notes]
+# Markdown notes, such as voice-note captures of ideas, each one an item
+# labelled "idea". attentiond only reads: it never edits, moves or deletes a
+# note. Off by default: it reads directories you have to name.
+enabled = false
+
+# How often the directories are listed.
+poll = "1m"
+
+# One table per watched directory. Only its top level is read: *.md files, no
+# subdirectories, no dotfiles, nothing over 1 MiB. A leading ~ is expanded and
+# the path must otherwise be absolute. Labels must be unique, because the item
+# id is notes:<label>/<file name>. A directory that does not exist is a
+# warning in /health, not an error.
+# [[notes.dirs]]
+# path = "~/notes/ideas"
+# label = "ideas"
