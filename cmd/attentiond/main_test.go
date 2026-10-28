@@ -10,7 +10,7 @@ import (
 	"github.com/devanmcgeer/attentiond/internal/config"
 )
 
-func TestDatadogSourceIsOffWithoutKeysAndWarnsByName(t *testing.T) {
+func TestDatadogSourceIsOffWithoutKeysAndLogsNoKeyData(t *testing.T) {
 	t.Setenv("TEST_DD_API_KEY", "")
 	t.Setenv("TEST_DD_APP_KEY", "never-logged")
 
@@ -27,11 +27,13 @@ func TestDatadogSourceIsOffWithoutKeysAndWarnsByName(t *testing.T) {
 	if err != nil || poller != nil {
 		t.Fatalf("poller = %v, err = %v, want a disabled source and no error", poller, err)
 	}
-	if !strings.Contains(logs.String(), "TEST_DD_API_KEY") {
-		t.Errorf("warning does not name the missing variable: %s", logs.String())
+	if !strings.Contains(logs.String(), "datadog adapter disabled") {
+		t.Errorf("no warning that the source is off: %s", logs.String())
 	}
-	if strings.Contains(logs.String(), "never-logged") {
-		t.Errorf("a key value reached the log: %s", logs.String())
+	for _, leak := range []string{"never-logged", "TEST_DD_API_KEY", "TEST_DD_APP_KEY"} {
+		if strings.Contains(logs.String(), leak) {
+			t.Errorf("%q reached the log: %s", leak, logs.String())
+		}
 	}
 
 	// A fixture needs no keys at all.
