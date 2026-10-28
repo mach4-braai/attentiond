@@ -465,8 +465,9 @@ reads. Nothing is written back to Datadog.
 It is off by default. The keys come from the environment, from the variables
 `api_key_env` and `app_key_env` name (`DD_API_KEY` and `DD_APP_KEY`). The
 application key needs `security_monitoring_findings_read` or `appsec_vm_read`.
-With either one missing the source stays off and startup names the variable.
-The keys are never logged, and they are scrubbed from every error.
+With either one missing the source stays off and startup says so. Startup
+logs neither the keys nor the variable names, and the keys are scrubbed from
+every error.
 
 Every finding is one item: `source` is `datadog`, the id is
 `datadog:<finding id>`, `title` is the finding's title, `label` is

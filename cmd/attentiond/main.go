@@ -371,12 +371,11 @@ func newDatadogPoller(cfg config.Datadog, store *attention.Store, log *slog.Logg
 
 	apiKey, appKey, err := datadog.ResolveKeys(cfg.APIKeyEnv, cfg.AppKeyEnv)
 	if err != nil {
-		log.Warn("datadog adapter disabled, no credential", "error", err)
+		log.Warn("datadog adapter disabled: the variables api_key_env and app_key_env name are not both set")
 		return nil, nil
 	}
 	log.Info("datadog adapter enabled",
-		"site", cfg.Site, "credential", cfg.APIKeyEnv+" and "+cfg.AppKeyEnv,
-		"poll", cfg.Poll.String(), "query", cfg.Query)
+		"site", cfg.Site, "poll", cfg.Poll.String(), "query", cfg.Query)
 
 	return datadog.NewPoller(
 		datadog.NewClient(datadog.BaseURL(cfg.Site), apiKey, appKey, 30*time.Second),
